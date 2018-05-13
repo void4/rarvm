@@ -1,0 +1,846 @@
+from lark import Lark, Tree, Transformer
+from lark.tree import Visitor
+from lark.lexer import Token
+
+from assembler import pack
+from asmutils import asm
+
+from utils import L, kahn
+
+grammar = r"""
+NAME: /\*?[a-zA-Z_]\w*/
+COMMENT: /#[^\n]*/
+_NEWLINE: ( /\r?\n[\t ]*/ | COMMENT)+
+
+_DEDENT: "<DEDENT>"
+_INDENT: "<INDENT>"
+
+%import common.ESCAPED_STRING
+string: ESCAPED_STRING
+
+number: DEC_NUMBER
+DEC_NUMBER: /0|[1-9]\d*/i
+
+%ignore /[\t \f]+/  // Whitespace
+
+start: (_NEWLINE | typedef | funcdef)*
+
+
+
+tnpair: NAME NAME
+funcdef: "def" funname "(" [funparams] ")" ["->" "(" [funrets] ")"] ":" funcbody
+funcbody: suite
+funparams: tnpair ("," tnpair)*
+funrets: NAME ("," NAME)*
+
+typedef: "typ" NAME "{" funparams "}" _NEWLINE
+
+?stmt: (simple_stmt | compound_stmt)
+suite: _NEWLINE _INDENT _NEWLINE? stmt+ _DEDENT _NEWLINE?
+
+compound_stmt: (if_stmt | while_stmt | write_stmt)
+if_stmt: "if" test ":" suite ["else" ":" suite]
+while_stmt: "while" [test] ":" suite
+write_stmt: "write" "(" expr "," expr ["," expr] ")"
+
+?test: or_test
+?or_test: and_test ("or" and_test)*
+?and_test: not_test ("and" not_test)*
+?not_test: "not" not_test -> not
+| comparison
+?comparison: expr _comp_op expr
+!_comp_op: "==" | "!="
+
+simple_stmt: (assign | run | doreturn | doyield | funcall) _NEWLINE
+
+assign: NAME "=" expr
+run: "run" "(" number ")"
+doreturn: "return" expr
+doyield: "yield" expr
+
+?expr: arith_expr
+?arith_expr: term (_add_op term)*
+?term: factor (_mul_op factor)*
+?factor: _factor_op factor | molecule
+?molecule: read | funcall | atom |  molecule "[" [expr] "]" -> getitem
+
+read: "read" "(" expr ["," expr] ")"
+
+?atom: "[" listmaker "]" | tuple | attr | NAME | number | string
+listmaker: test ("," test)* [","]
+
+!_factor_op: "+"|"-"|"~"
+!_add_op: "+"|"-"
+!_mul_op: "*"|"/"|"%"
+
+funcall: funname "(" [funargs] ")"
+funname: NAME
+funargs: expr ("," expr)*
+tuple: [NAME] "{" [expr ("," expr)*] "}"
+attr: NAME "." NAME
+"""
+
+l = Lark(grammar, debug=True)
+
+def indent(line):
+    return (len(line) - len(line.lstrip(' '))) // 4
+
+def prep(code):
+    code = code.split('\n')
+    code.append('\n')
+    current = 0
+    lines = ''
+    for line in code:
+        ind = indent(line)
+        if ind > current:
+            prefix = '<INDENT>' * (ind - current)
+        else:
+            if ind < current:
+                prefix = '<DEDENT>' * (current - ind)
+            else:
+                prefix = ''
+        current = ind
+        lines += prefix + line.lstrip() + '\n'
+
+    return lines.replace("<DEDENT>\n<INDENT>", "")
+
+
+
+def getChildByName(node, name):
+    for child in node.children:
+        if child._pretty_label() == name:
+            return child
+
+class Generator:
+
+    def __init__(self):
+        self.counter = 0
+
+    def next(self):
+        self.counter += 1
+        return self.counter
+
+    def label(self):
+        return 'label:%i' % self.next()
+
+    def name(self):
+        return 'name:%i' % self.next()
+
+def compile_function(abort, warn, generator, types, funcs, funcname):
+    print("Compiling function %s" % funcname)
+    func = funcs[funcname]
+    tree = func["body"]
+    intypes = {name: typ for typ, name in func["in"]}
+    var = {}
+
+    def hasType(name):
+        if name in var or name in intypes:
+            return True
+        else:
+            return False
+
+    def isint(s):
+        try:
+            int(s)
+            return True
+        except:
+            return False
+
+    def getTypeSignature(expr):
+        print(expr)
+        if isinstance(expr, Token):
+            #print(expr.type, expr.type == "DEC_NUMBER")
+            if expr.type == "DEC_NUMBER":
+                return "u"
+
+            expr = expr.value
+
+        if isinstance(expr, str):
+            if isint(expr):
+                return "u"
+
+            name = expr
+            if name in var:
+                return var[name]["type"]
+            elif name in intypes:
+                return intypes[name]
+            else:
+                abort("Unknown variable %s" % name)
+        elif isinstance(expr, Tree):
+            #print(expr)
+            try:
+                expr.type
+            except AttributeError:
+                print(expr)
+            return expr.type
+        elif isinstance(expr, L):
+            if isinstance(expr.type, str):
+                return expr.type
+            elif isinstance(expr.type, list):
+                if len(expr.type) == 1:
+                    return expr.type[0]
+                return expr.type
+            else:
+                #return list(expr.type)[0]
+                raise Exception("huh?")
+        else:
+            print("expr:",expr)
+            abort("Unknown expression type")
+
+    def pushVar(name):
+        typ = types[getTypeSignature(name)]
+
+    def codeOrAbort(expr):
+        if isinstance(expr, Tree) or isinstance(expr, L):
+            try:
+                return expr.code
+            except Exception as e:
+                print(e, expr)
+        else:
+            print("expr:",expr)
+            abort("Unknown addr push")
+
+    def pushExpr(expr):
+        if isinstance(expr, Token):
+            expr = expr.value
+
+        if isinstance(expr, str):
+
+            if isint(expr):
+                return ["PUSH %i" % int(expr)]
+
+            code = []
+
+            typ = types[getTypeSignature(expr)]
+
+            for index in range(typ["len"]):
+                code += getAbsoluteOffset(expr, index)
+                code += ["READ"]
+            return code
+        else:
+            return codeOrAbort(expr)
+
+    def readAddr(expr, offset=None):
+        code = pushAddr(expr, offset=offset)
+        code += ["READ"]
+        return code
+
+    def flatten(l):
+        return sum(l,[])
+
+    def getSubtype(name, key):
+        for subtype in types[name]["def"]:
+            if subtype["name"] == key:
+                return subtype
+
+    def varLen():
+        return sum(types[var[v]["type"]]["len"] for v in var)
+
+    def typLen(typelist):
+        return sum(types[typ]["len"] for typ in typelist)
+
+    def inTypLen(typenamelist):
+        return sum(types[typ[0]]["len"] for typ in typenamelist)
+
+    arglen = inTypLen(func["in"])
+    retlen = typLen(func["out"])
+
+    print(func["in"], arglen)
+    print(func["out"], retlen)
+
+    # Get offset relative to stack frame
+    def getRelativeOffset(name):
+        offset = retlen
+        for v in var:
+            if v == name:
+                return offset
+            offset += types[var[v]["type"]]["len"]
+
+        offset = -arglen
+        for i in func["in"]:
+            if i[1] == name:
+                return offset
+            offset += types[i[0]]["len"]
+        raise Exception("%s not found" % name)
+
+    def add(i):
+        if i < 0:
+            return ["PUSH %i" % -i, "SUB"]
+        elif i > 0:
+            return ["PUSH %i" % i, "ADD"]
+        else:
+            return []
+
+    def push(offset, page=0):
+        return ["PUSH %i" % page, "PUSH %i" % offset]
+
+    def read(offset, page=0):
+        return push(offset, page) + ["READ"]
+
+    # Get absolute offset in page
+    def getAbsoluteOffset(name, index=None):
+        offset = getRelativeOffset(name)
+        code = ["PUSH 0"] + push(0,0) + ["READ"]
+        code += add(offset)
+        if index is not None:
+            code += add(index)
+        return code
+
+    def listOrFirstElement(l):
+        if isinstance(l, list) and len(l) == 1:
+            return l[0]
+        return l
+
+    # Returns true if t1 != t2
+    def compareTypes(t1, t2):
+        return listOrFirstElement(t1) != listOrFirstElement(t2)
+
+    def ensurePrimitive(op, n1, n2):
+        leftType = getTypeSignature(n1)
+        rightType = getTypeSignature(n2)
+        if leftType != "u" or rightType != "u":
+            abort("Can only %s variables of type 'u', got %s and %s" % (op, leftType, rightType), node[0])
+        if leftType != rightType:
+            abort("Cannot %s two different types" % op, node[0])
+        return leftType, rightType
+
+    # Default function cleanup, after return values have been pushed to the stack
+    def coda():
+        # Push old return address to stack
+        code = asm("read(0,sub(arealen(0),1))")
+
+        # Push old stack frame address to stack
+        code += asm("read(0,sub(arealen(0),2))")
+
+        # Truncate area to current stack frame address
+        code += asm("dealloc(0, sub(arealen(0), read(0,0)))")
+
+        # Set old stack frame address again
+        code += asm("write(0,0,rot2)")
+
+        if funcname == "main":
+            #code += asm("pop")
+            #code += asm("dearea(0)")
+            code += ["HALT"]
+        else:
+            # Jump to return address
+            code += ["JUMP"]
+
+        return code
+
+    # Puts default return values on stack + coda
+    def ecoda():
+        code = []
+        for i in range(retlen):
+            code += asm("push(0)")
+        code += coda()
+        return code
+
+    # Generate code here?
+    class TypeAnnotator(Transformer):
+        def funcbody(self, node):
+            node = L(node)
+            node.code = []
+            # Allocate stack frame
+            #print("RET", func["out"])
+
+            # Calculate stack frame size # + return address + stack frame
+            framesize = retlen + varLen() + 2
+
+            # Allocate stack frame
+            node.code += asm("alloc(0,%i)" % framesize)
+
+            # Write current stack frame address to second last item of stack frame
+            node.code += asm("write(0,sub(arealen(0),2),read(0,0))")
+
+            # Write return address from stack to end of stack frame
+            node.code += asm("write(0,sub(arealen(0),1),rot2)")
+
+            # Write stack frame address to 0:0
+            node.code += asm("write(0,0,sub(arealen(0), %i))" % framesize)
+
+            # Put last index of area on stack
+            #node.code += ["PUSH 0"]
+            #node.code += ["PUSH 0", "arealen", "PUSH 1", "SUB"]
+            # Save return address in frame
+            #node.code += ["ROT2", "WRITE"]
+            print(funcname, node[0])
+            node.code += node[0].code
+            node.code += ecoda()
+
+            code = "\n".join(node.code)
+
+            #XXX check for jump at end of function!
+            return code
+
+        def suite(self, node):
+            node = L(node)
+            node.code = []
+            for child in node:
+                print(child)
+                node.code += pushExpr(child)
+            return node
+
+        def doreturn(self, node):
+            node = L(node)
+            node.code = []
+            retType = getTypeSignature(node[0])
+            if compareTypes(retType, func["out"]):
+                abort("Return type doesn't match function signature\nExpected %s, got %s" % (func["out"], retType))
+            node.type = retType
+            node.code += pushExpr(node[0])
+
+            node.code += coda()
+
+            return node
+
+        def doyield(self,node):
+            node = L(node)
+            node.code = []
+            node.code += pushExpr(node[0])
+            node.code += ["YIELD"]
+            return node
+
+        def funcall(self, node):
+            print("()", node)
+            node = L(node)
+            otherfuncname = node[0].children[0].value
+            otherfunc = funcs[otherfuncname]
+            node.type = otherfunc["out"]
+            node.code = []
+            # CANNOT CHANGE STACK FRAME BOUNDARY; THEN pushExpr, because they depend on unmodified AREALEN!
+            # Allocate parameter space
+            node.code += asm("alloc(0,%i)" % inTypLen(otherfunc["in"]))
+            if len(node) > 1:
+                intypes = otherfunc["in"]
+                for i, param in enumerate(node[1].children):
+                    paramsig = getTypeSignature(param)
+                    if compareTypes(intypes[i][0], paramsig):
+                        abort("Wrong types on function call, expected %s, got %s" % (intypes[i], paramsig))
+
+                    node.code += pushExpr(param)
+                    for index in range(types[paramsig]["len"]):
+                        # Write args to end of current stack frame
+                        node.code += asm("push(0,sub(arealen(0),%i))" % (index+1))
+                        node.code += ["ROT2"]
+                        node.code += ["WRITE"]
+
+            # Push return address
+            label = generator.label()
+            node.code += ["PUSH %s" % label]
+            # XXX PUSH FUNC___!"§"otherfuncname (collisions)
+            node.code += ["PUSH %s" % otherfuncname, "JUMP"]
+            node.code += [label+":"]
+            # TODO now handle returned values!
+            # Deallocate parameters
+            node.code += asm("dealloc(0,%i)" % (inTypLen(otherfunc["in"])))
+            return node
+
+        def if_stmt(self, node):
+            node = L(node)
+            node.code += pushExpr(node[0])
+            end_label = generator.label()
+            if len(node) == 3:
+                else_label = generator.label()
+                node.code += ['PUSH %s' % else_label]
+            else:
+                node.code += ['PUSH %s' % end_label]
+            node.code += ['JZ']
+            node += node[1].cpde
+            if len(node) == 3:
+                node.code += ['PUSH %s' % end_label]
+                node.code += ['JUMP']
+                node.code += [else_label + ':']
+                node += node[2].code
+            node.code += [end_label + ':']
+            return node
+
+        def while_stmt(self, node):
+            node = L(node)
+            start_label = generator.label()
+            end_label = generator.label()
+            node.code = [start_label + ':']
+            if len(node) == 2:
+                node.code += pushExpr(node[0])
+                node.code += ['NOT']
+                node.code += ['PUSH %s' % end_label]
+                node.code += ['JZ']
+                node.code += node[1].code
+            else:
+                node.code += node[0].code
+            node.code += ['PUSH %s' % start_label]
+            node.code += ['JUMP']
+            node.code += [end_label + ':']
+            return node
+
+        def getitem(self, node):
+            node = L(node)
+            leftType = getTypeSignature(node[0])
+            rightType = getTypeSignature(node[1])
+            if not leftType.startswith("*"):
+                abort("Cannot index into non-pointer type %s of '%s'" % (leftType, node[0]), node)
+            if rightType != "u":
+                abort("Cannot index into pointer using non-u type %s of %s" % (rightType, node[1]), node)
+            print("[]", leftType, rightType)
+            node.code = []
+            node.code += ["PUSH 0"] + pushExpr(node[0]) + pushExpr(node[1]) + ["ADD", "READ"]
+            node.type = leftType[1:]
+            return node
+
+        def read(self, node):
+            node = L(node)
+            node.code = []
+            leftType = getTypeSignature(node[0])
+
+            if leftType != "u":
+                abort("Cannot use non 'u' %s as index" % leftType, node[0])
+
+            if len(node) == 1:
+                node.code += ["PUSH 0"]
+                node.code += pushExpr(node[0])
+            else:
+                rightType = getTypeSignature(node[1])
+                if rightType != "u":
+                    abort("Cannot use non 'u' %s as index" % rightType, node[1])
+                node.code += pushExpr(node[0])
+                node.code += pushExpr(node[1])
+            node.code += ["READ"]
+            node.type = "u"
+            return node
+
+        def write_stmt(self, node):
+            node = L(node)
+            node.code = []
+            leftType = getTypeSignature(node[0])
+
+            if leftType != "u":
+                abort("Cannot use non 'u' %s as index" % leftType, node[0])
+
+            if len(node) == 2:
+                node.code += ["PUSH 0"]
+                node.code += pushExpr(node[0])
+            else:
+                middleType = getTypeSignature(node[1])
+                if middleType != "u":
+                    abort("Cannot use non 'u' %s as index" % middleType, node[1])
+                node.code += pushExpr(node[0])
+                node.code += pushExpr(node[1])
+            node.code += pushExpr(node[-1])
+            node.code += ["WRITE"]
+            return node
+
+        def comparison(self, node):
+            node = L(node)
+            print("cmp", node)
+            leftType, rightType = ensurePrimitive("cmp", node[0], node[2])
+            node.code = []
+
+            node.code += pushExpr(node[0])
+            node.code += pushExpr(node[2])
+            node.code += ["SUB"]
+            if node[1].value == '!=':
+                node.code += ["NOT"]
+
+            node.type = "u"
+            return node
+
+        def compound_stmt(self, node):
+            node = L(node)
+            node.code = pushExpr(node[0])
+            return node
+
+        def simple_stmt(self, node):
+            node = L(node)
+            node.code = pushExpr(node[0])
+            return node
+
+        def arith_expr(self, node):
+            node = L(node)
+            node.type = getTypeSignature(node[0])
+            node.code = pushExpr(node[0])
+            return node
+
+        def assign(self, node):
+            print("=", node)
+            rightType = getTypeSignature(node[1])
+            print("=", rightType)
+
+            if hasType(node[0].value):
+                leftType = getTypeSignature(node[0].value)
+                if compareTypes(leftType, rightType):
+                    abort("Assignment type mismatch %s = %s" % (leftType, rightType), node)
+            else:
+                #print("New var", node[0].value)
+                if isinstance(rightType, list) and len(rightType) > 1:
+                    raise NotImplemented("nope")
+                elif len(rightType) == 0:
+                    abort("Cannot assign from () to something", node[0])
+
+                var[node[0].value] = {"type":rightType}
+                #node.code += [["_RESERVE", node[0].value]]
+            #print(types,var[node[0].value])
+
+            node = L(node)
+            node.code = []
+            """
+            node.code += getAbsoluteOffset(node[0].value)
+            node.code += getAbsoluteOffset(node[1].value)
+            node.code += rightType["len"]
+            node.code += "MEMCOPY"
+            """
+            node.code += pushExpr(node[1])
+            for index in range(types[rightType]["len"]-1, -1, -1):
+                # composite assignment somewhere else!
+                node.code += getAbsoluteOffset(node[0].value, index)
+                node.code += ["ROT2"]
+                node.code += ["WRITE"]
+
+            return node
+
+        def number(self, node):
+            node = L(node)
+            node.type = "u"
+            #TODO make sure u is in range
+            node.code = ["PUSH %s" % node[0].value]
+            return node
+
+        def listmaker(self, node):
+            node = L(node)
+            node.type = ["u"] * len(node)
+            return node
+
+        def run(self, node):
+            node = L(node)
+            node.code = asm(push(99999999999,99999999999))
+            node.code += node[0].code
+            node.code += ["RUN"]
+            return node
+
+        def attr(self, node):
+            if not hasType(node[0].value):
+                abort("Name %s has no type" % node[0].value, node[0])
+            typ = getTypeSignature(node[0])#XXX
+            if not typ in types:
+                abort("%s's type is not a struct" % node[0].value, node[0])
+            subtype = getSubtype(typ, node[1].value)
+            if subtype is None:
+                abort("%s.'%s' is not a valid attribute" % (node[0].value, node[1].value), node[1])
+            node = L(node)
+            node.code = []
+            for index in range(subtype["len"]):
+                node.code += getAbsoluteOffset(node[0].value, subtype["offset"]+index)
+            node.code += ["READ"]
+            node.type = subtype["type"]
+            return node
+
+        def tuple(self, node):
+            node = L(node)
+            node.code = []
+            print("TUPLE", node, node.code)
+            if isinstance(node, list):
+                data = node
+                tup = list(getTypeSignature(n) for n in data)
+                node.type = tup#flatten(tup)
+            else:
+                data = node[1]
+                tup = list(getTypeSignature(n) for n in data)
+                #TODO compare name with actual type
+                nametyp = types[node[0].value]
+                if nametyp != tup:
+                    abort("Invalid type arguments: %s %s" % (nametyp, tup), node[0])
+                node.type = nametyp
+
+            for n in data:
+                node.code += pushExpr(n)
+
+            return node
+
+        def term(self, node):
+            node = L(node)
+            node.code = pushExpr(node[0])
+            for i in range((len(node) - 1) // 2):
+                nextop = node[1 + i * 2 + 1]
+                leftType, rightType = ensurePrimitive(node[1].value, node[0], nextop)
+                node.code += pushExpr(nextop)
+                node.code += ['%s' % {'*':'MUL',  '/':'DIV',  '%':'MOD'}[node[1 + i * 2].value]]
+
+            node.type = leftType
+            return node
+
+        def arith_expr(self, node):
+            node = L(node)
+            node.code = pushExpr(node[0])
+            for i in range((len(node) - 1) // 2):
+                nextop = node[1 + i * 2 + 1]
+                leftType, rightType = ensurePrimitive(node[1].value, node[0], nextop)
+                node.code += pushExpr(nextop)
+                node.code += ['%s' % {'+':'ADD',  '-':'SUB',  '~':'NOT'}[node[1 + i * 2].value]]
+
+            node.type = leftType
+            return node
+
+        def expr(self, node):
+            node = L(node)
+            node.code = []
+            node.type = getTypeSignature(node[0])
+            node.code = pushExpr(node[0])
+            return node
+
+        def string(self, node):
+            node = L(node)
+            node.type = "vector"
+            arr = node[0].value[1:-1]
+            i = 0
+            new = []
+            while i < len(arr):
+                c = arr[i]
+                if c == "\\" and i != len(arr)-1:
+                    nxt = arr[i+1]
+                    if nxt == "n":
+                        new.append(ord("\n"))
+                        i += 2
+                    elif nxt == "\\":
+                        new.append(ord("\\"))
+                        i += 2
+                    else:
+                        abort("Invalid string format \\%s" % nxt, node[0])
+                else:
+                    new.append(ord(c))
+                    i += 1
+            print("String", new)
+            node.code = []
+            node.code += asm("alloc(0,%i)" % len(new))
+            for i, c in enumerate(new):
+                node.code += asm("write(0,sub(arealen(0),%i),%i)" % (len(new)-i, c))
+
+            node.code += asm("push(sub(arealen(0),%i),%i)" % (len(new), len(new)))
+            return node
+    # todo add casting
+
+    annotator = TypeAnnotator()
+    print(tree)
+    tree = annotator.transform(tree)
+
+    return tree
+
+def compile(text):
+
+    clean = text.strip()
+
+    def errortext(error, msg, node=None):
+        out = error + ":\n"
+        if node is not None:
+            try:
+                out += "Line %i: " % node.line + "\n"
+                out += clean.split("\n")[node.line-1] + "\n"
+                out += " "*node.column+"^\n"
+            except AttributeError as e:
+                print("AttributeError", e)
+        out += msg
+        return out
+
+    def warn(msg, node=None):
+        print(errortext("Warning",msg, node))
+
+    def abort(msg, node=None):
+        raise Exception(errortext("Error",msg, node))
+
+    prepped = prep(clean)
+    print(prepped)
+    parsed = l.parse(prepped)
+
+    types = {}
+    funcs = {}
+
+    def pairs(tree):
+        return [[n.children[0].value,n.children[1].value] for n in tree.children]
+
+    class TypeGetter(Visitor):
+        def start(self, node):
+            #print(node)
+            print("Collected type definitions and function signatures.")
+
+        def typedef(self, node):
+            node = node.children
+            types[node[0].value] = pairs(node[1])
+
+        def funcdef(self, node):
+            indef = getChildByName(node, "funparams")
+            if indef is None:
+                indef = []
+            else:
+                indef = [[t,n] for t,n in pairs(indef)]
+
+            outdef = getChildByName(node, "funrets")
+            if outdef is None:
+                outdef = []
+            else:
+                outdef = [n.value for n in outdef.children]
+
+
+            funcs[getChildByName(node, "funname").children[0].value] = {
+                "in":indef,
+                "out":outdef,
+                "body": getChildByName(node, "funcbody")}
+
+    tg = TypeGetter()
+    tg.visit(parsed)
+
+    # Kahn's algorithm (DAG)
+
+    for k,v in types.items():
+        types[k] = {"def":v,"len":0}
+
+    basetypes = {"u":{"def":[],"len":1}}
+    types = {**basetypes, **types}
+
+    # Add pointer types
+    for typename in list(types):
+        types["*"+typename] = {"def":[], "len":1}
+
+    indexorder = kahn(list(types.keys()), [[tnpair[0] for tnpair in value["def"]] for value in types.values()])
+    for index in indexorder:
+        key = list(types.keys())[index]
+        for tnpairindex, tnpair in enumerate(types[key]["def"]):
+            # Add subtype length and cumulated offset
+            types[key]["def"][tnpairindex] = {
+                "type":types[key]["def"][tnpairindex][0],
+                "name":types[key]["def"][tnpairindex][1],
+                "len":types[tnpair[0]]["len"],
+                "offset":types[key]["len"]
+            }
+            types[key]["len"] += types[tnpair[0]]["len"]
+
+    for typename in types:
+        types[typename]["name"] = typename
+
+    generator = Generator()
+
+    hasmain = False
+    for funcname in funcs:
+        if funcname == "main":
+            hasmain = True
+        funcs[funcname]["name"] = funcname
+        funcs[funcname]["code"] = compile_function(abort, warn, generator, types, funcs, funcname)
+
+    if not hasmain:
+        abort("No main function specified")
+
+    # Push return address
+    code = asm("push(0)")
+    # Allocate 0 stack frame
+    code += asm("area")
+    code += asm("alloc(0,1)")
+    code += ["PUSH main", "JUMP"]
+    code = "\n".join(code) + "\n"
+    # TODO Main should be first, or jump to it?
+    offset = 0
+    for funcname, func in funcs.items():
+        func["offset"] = offset
+        code += funcname+":"+"\n"
+        code += func["code"] + "\n"
+        offset = len(code)
+
+    print(code)
+    binary = pack(code)
+    return binary
