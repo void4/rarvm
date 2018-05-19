@@ -53,6 +53,13 @@ def assemble(text):
 	#print("Optimized:", len(asm), "Unoptimized:", len(translate(text_unopt)))
 	return asm
 
+def isint(s):
+	try:
+		int(s)
+		return True
+	except ValueError:
+		return False
+
 def translate(text, debug=False):
 	lines = text.split("\n")
 
@@ -90,6 +97,10 @@ def translate(text, debug=False):
 			opcounter += 1
 			ignore = False
 			line["type"] = "code"
+		elif isint(opline[0]):
+			opcounter += 1
+			ignore = False
+			line["type"] = "code"
 		elif opline[0]:
 			raise Exception("Invalid symbol:", opline[0])
 		else:
@@ -100,9 +111,12 @@ def translate(text, debug=False):
 
 		if line["ignore"]:
 			continue
+
 		op = line["opline"][0]
 		if op in ["push", "pushr"]:
 			line["code"] = [PUSH, intorlabel(line["opline"][1])]
+		elif isint(op):
+			line["code"] = [int(op)]
 		elif op in opcodes:
 			line["code"] = [opcodes.index(op)]
 		else:

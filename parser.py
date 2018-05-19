@@ -70,7 +70,7 @@ dealloc_stmt: "$dealloc" "(" expr ["," expr] ")"
 ?arith_expr: term (_add_op term)*
 ?term: factor (_mul_op factor)*
 ?factor: _factor_op factor | molecule
-?molecule: read | funcall | atom | arealen_expr | memorylen_expr |  molecule "[" [expr] "]" -> getitem
+?molecule: read | funcall | atom | arealen_expr | memorylen_expr | keyget_expr |  molecule "[" [expr] "]" -> getitem
 
 read: "$read" "(" expr ["," expr] ")"
 
@@ -79,6 +79,7 @@ listmaker: test ("," test)* [","]
 
 arealen_expr: "$arealen" "(" expr ")"
 memorylen_expr: "$memorylen"
+keyget_expr: "$keyget" "(" expr ")"
 
 !_factor_op: "+"|"-"|"~"
 !_add_op: "+"|"-"
@@ -141,9 +142,10 @@ class Generator:
     def name(self):
         return 'name:%i' % self.next()
 
-MEM_STACK = 0
-MEM_HEAP = 1
-MEM_IO = 2
+MEM_CODE = 0
+MEM_STACK = 1
+MEM_HEAP = 2
+MEM_IO = 3
 
 def compile_function(abort, warn, generator, types, funcs, funcname):
     print("Compiling function %s" % funcname)
@@ -617,6 +619,16 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             node.code += ["AREALEN"]
             return node
 
+        def keyget_expr(self, node):
+            node = L(node)
+            node.type = "u"
+            leftType = getTypeSignature(node[0])
+            if leftType != "u":
+                abort("Cannot use non 'u' %s as index to keyget" % leftType, node[0])
+            node.code = pushExpr(node[0])
+            node.code += ["KEYGET"]
+            return node
+
         def memorylen_expr(self, node):
             node = L(node)
             node.type = "u"
@@ -973,6 +985,7 @@ def compile(text, path=None):
     offset = 0
     for funcname, func in funcs.items():
         func["offset"] = offset
+        code += str(len(func["code"])) + "\n"
         code += funcname+":"+"\n"
         code += func["code"] + "\n"
         offset = len(code)

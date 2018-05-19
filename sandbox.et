@@ -1,5 +1,35 @@
 import stdio
 
+def writeloop(u srca, u srcp, u tgta, u tgtp, u len):
+    i = 0
+    while i != len:
+        $write(tgta, tgtp+i, $read(srca, srcp+i))
+        i = i + 1
+
+def box(u funcname) -> (u):
+    offset = $keyget(funcname)
+    funcsize = $read(0xff, offset-1)#XXX code!
+    # Create new area
+    $area
+    # Area index
+    a = $memorylen - 1
+    # Alloc header
+    $alloc(a, 5)
+    # c,s,d,m sizes
+    $alloc(a, 4)
+    # Alloc code
+    start = $arealen(a)
+    funcstart = start + 1
+    $alloc(a, funcsize+1)
+    # Write code
+    writeloop(0xff, offset-1, a, start, funclen)
+    # Alloc map
+    start = $arealen(a)
+    $alloc(a, 2)
+    # Write map
+    $write(a, start, funcname)
+    $write(a, start+1, funcstart)
+
 def run(u ar, u gas, u mem) -> (u):
     println("area:")
     printiln(ar)

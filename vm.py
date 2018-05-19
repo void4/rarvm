@@ -433,7 +433,6 @@ def run(binary, gas=100, mem=100, debug=False):
                         state[STACK][-1] = state[MAP][i+1]
                         break
                 else:
-                    print("failed")
                     state[STACK].pop(-1)
                     state[HEAD][MEM] += 1
                 next(state)
