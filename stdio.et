@@ -1,0 +1,27 @@
+typ vector {u start, u length}
+
+def putc(u char):
+    $alloc(2,2)
+    $write(2,0,42)
+    $write(2,1,char)
+    yield
+
+def printi(u n):
+    if n > 9:
+        a = n / 10
+        printi(a)
+    putc(48+n%10)
+
+def printiln(u n):
+    printi(n)
+    print("\n")
+
+def print(vector string):
+    i = 0
+    while i != string.length:
+        putc($read(1,string.start+i))
+        i = i + 1
+
+def println(vector string):
+    print(string)
+    print("\n")

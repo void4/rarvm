@@ -5,7 +5,9 @@ from lark.lexer import Token
 from assembler import pack
 from asmutils import asm
 
-from utils import L, kahn
+from utils import L, kahn, stringToWords, nametoint
+
+import os
 
 grammar = r"""
 NAME: /\*?[a-zA-Z_]\w*/
@@ -23,7 +25,7 @@ DEC_NUMBER: /0|[1-9]\d*/i
 
 %ignore /[\t \f]+/  // Whitespace
 
-start: (_NEWLINE | typedef | funcdef)*
+start: (_NEWLINE | typedef | funcdef | importdef)*
 
 
 
@@ -33,15 +35,17 @@ funcbody: suite
 funparams: tnpair ("," tnpair)*
 funrets: NAME ("," NAME)*
 
+importdef: "import" NAME _NEWLINE
+
 typedef: "typ" NAME "{" funparams "}" _NEWLINE
 
 ?stmt: (simple_stmt | compound_stmt)
 suite: _NEWLINE _INDENT _NEWLINE? stmt+ _DEDENT _NEWLINE?
 
-compound_stmt: (if_stmt | while_stmt | write_stmt)
+compound_stmt: (if_stmt | while_stmt)
 if_stmt: "if" test ":" suite ["else" ":" suite]
 while_stmt: "while" [test] ":" suite
-write_stmt: "write" "(" expr "," expr ["," expr] ")"
+
 
 ?test: or_test
 ?or_test: and_test ("or" and_test)*
@@ -49,25 +53,32 @@ write_stmt: "write" "(" expr "," expr ["," expr] ")"
 ?not_test: "not" not_test -> not
 | comparison
 ?comparison: expr _comp_op expr
-!_comp_op: "==" | "!="
+!_comp_op: "==" | "!=" | "<" | "<=" | ">" | ">="
 
-simple_stmt: (assign | run | doreturn | doyield | funcall) _NEWLINE
+simple_stmt: (assign | run | doreturn | doyield | write_stmt | area_stmt | alloc_stmt | dealloc_stmt | funcall) _NEWLINE
 
+write_stmt: "$write" "(" expr "," expr ["," expr] ")"
 assign: NAME "=" expr
-run: "run" "(" number ")"
+run: "$run" "(" expr ")"
 doreturn: "return" expr
-doyield: "yield" expr
+doyield: "yield" //expr
+area_stmt: "$area"
+alloc_stmt: "$alloc" "(" expr ["," expr] ")"
+dealloc_stmt: "$dealloc" "(" expr ["," expr] ")"
 
 ?expr: arith_expr
 ?arith_expr: term (_add_op term)*
 ?term: factor (_mul_op factor)*
 ?factor: _factor_op factor | molecule
-?molecule: read | funcall | atom |  molecule "[" [expr] "]" -> getitem
+?molecule: read | funcall | atom | arealen_expr | memorylen_expr |  molecule "[" [expr] "]" -> getitem
 
-read: "read" "(" expr ["," expr] ")"
+read: "$read" "(" expr ["," expr] ")"
 
 ?atom: "[" listmaker "]" | tuple | attr | NAME | number | string
 listmaker: test ("," test)* [","]
+
+arealen_expr: "$arealen" "(" expr ")"
+memorylen_expr: "$memorylen"
 
 !_factor_op: "+"|"-"|"~"
 !_add_op: "+"|"-"
@@ -102,7 +113,11 @@ def prep(code):
         current = ind
         lines += prefix + line.lstrip() + '\n'
 
-    return lines.replace("<DEDENT>\n<INDENT>", "")
+    # Remove indent-dedent pairs
+    for i in range(5):
+        lines = lines.replace("<DEDENT>\n<INDENT>", "").replace("<DEDENT><INDENT>", "")
+
+    return lines
 
 
 
@@ -125,6 +140,10 @@ class Generator:
 
     def name(self):
         return 'name:%i' % self.next()
+
+MEM_STACK = 0
+MEM_HEAP = 1
+MEM_IO = 2
 
 def compile_function(abort, warn, generator, types, funcs, funcname):
     print("Compiling function %s" % funcname)
@@ -397,10 +416,21 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
         def doyield(self,node):
             node = L(node)
             node.code = []
-            node.code += pushExpr(node[0])
+            #node.code += pushExpr(node[0])
             node.code += ["YIELD"]
             return node
 
+        def area_stmt(self, node):
+            node = L(node)
+            node.code = ["AREA"]
+            return node
+
+        """
+        Frame structure
+                      fp here
+        lastframe|args|local vars|location of last frame|return addr|
+
+        """
         def funcall(self, node):
             print("()", node)
             node = L(node)
@@ -410,7 +440,7 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             node.code = []
             # CANNOT CHANGE STACK FRAME BOUNDARY; THEN pushExpr, because they depend on unmodified AREALEN!
             # Allocate parameter space
-            node.code += asm("alloc(0,%i)" % inTypLen(otherfunc["in"]))
+
             if len(node) > 1:
                 intypes = otherfunc["in"]
                 for i, param in enumerate(node[1].children):
@@ -419,37 +449,46 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
                         abort("Wrong types on function call, expected %s, got %s" % (intypes[i], paramsig))
 
                     node.code += pushExpr(param)
+
+                node.code += asm("alloc(0,%i)" % inTypLen(otherfunc["in"]))
+                for i, param in enumerate(node[1].children[::-1]):
+                    paramsig = getTypeSignature(param)
                     for index in range(types[paramsig]["len"]):
                         # Write args to end of current stack frame
-                        node.code += asm("push(0,sub(arealen(0),%i))" % (index+1))
+                        node.code += asm("push(0,sub(arealen(0),%i))" % (index+i+1))
                         node.code += ["ROT2"]
                         node.code += ["WRITE"]
 
             # Push return address
+            # TODO do this dynamically with IP
             label = generator.label()
             node.code += ["PUSH %s" % label]
             # XXX PUSH FUNC___!"§"otherfuncname (collisions)
-            node.code += ["PUSH %s" % otherfuncname, "JUMP"]
+            #node.code += ["PUSH %s" % otherfuncname, "JUMP"]
+            node.code += asm("keyget(%i)" % nametoint(otherfuncname))
+            node.code += ["JUMP"]
             node.code += [label+":"]
             # TODO now handle returned values!
             # Deallocate parameters
             node.code += asm("dealloc(0,%i)" % (inTypLen(otherfunc["in"])))
             return node
 
+        # TODO implement elif
         def if_stmt(self, node):
             node = L(node)
+            node.code = []
             node.code += pushExpr(node[0])
             end_label = generator.label()
             if len(node) == 3:
                 else_label = generator.label()
-                node.code += ['PUSH %s' % else_label]
+                node.code += ['PUSHR %s' % else_label]
             else:
-                node.code += ['PUSH %s' % end_label]
-            node.code += ['JZ']
-            node += node[1].cpde
+                node.code += ['PUSHR %s' % end_label]
+            node.code += ['JZR']
+            node.code += node[1].code
             if len(node) == 3:
-                node.code += ['PUSH %s' % end_label]
-                node.code += ['JUMP']
+                node.code += ['PUSHR %s' % end_label]
+                node.code += ['JUMPR']
                 node.code += [else_label + ':']
                 node += node[2].code
             node.code += [end_label + ':']
@@ -462,14 +501,13 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             node.code = [start_label + ':']
             if len(node) == 2:
                 node.code += pushExpr(node[0])
-                node.code += ['NOT']
-                node.code += ['PUSH %s' % end_label]
-                node.code += ['JZ']
+                node.code += ['PUSHR %s' % end_label]
+                node.code += ['JZR']
                 node.code += node[1].code
             else:
                 node.code += node[0].code
-            node.code += ['PUSH %s' % start_label]
-            node.code += ['JUMP']
+            node.code += ['PUSHR %s' % start_label]
+            node.code += ['JUMPR']
             node.code += [end_label + ':']
             return node
 
@@ -529,18 +567,97 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             node.code += ["WRITE"]
             return node
 
+        def alloc_stmt(self, node):
+            node = L(node)
+            node.code = []
+            leftType = getTypeSignature(node[0])
+
+            if leftType != "u":
+                abort("Cannot use non 'u' %s as index to alloc" % leftType, node[0])
+
+            if len(node) == 1:
+                node.code += ["PUSH 0"]
+                node.code += pushExpr(node[0])
+            else:
+                rightType = getTypeSignature(node[1])
+                if rightType != "u":
+                    abort("Cannot use non 'u' %s as size to alloc" % rightType, node[1])
+                node.code += pushExpr(node[0])
+                node.code += pushExpr(node[1])
+            node.code += ["ALLOC"]
+            return node
+
+        def dealloc_stmt(self, node):
+            node = L(node)
+            node.code = []
+            leftType = getTypeSignature(node[0])
+
+            if leftType != "u":
+                abort("Cannot use non 'u' %s as index to dealloc" % leftType, node[0])
+
+            if len(node) == 1:
+                node.code += ["PUSH 0"]
+                node.code += pushExpr(node[0])
+            else:
+                rightType = getTypeSignature(node[1])
+                if rightType != "u":
+                    abort("Cannot use non 'u' %s as size to dealloc" % rightType, node[1])
+                node.code += pushExpr(node[0])
+                node.code += pushExpr(node[1])
+            node.code += ["DEALLOC"]
+            return node
+
+        def arealen_expr(self, node):
+            node = L(node)
+            node.type ="u"
+            leftType = getTypeSignature(node[0])
+            if leftType != "u":
+                abort("Cannot use non 'u' %s as index to arealen" % leftType, node[0])
+            node.code = pushExpr(node[0])
+            node.code += ["AREALEN"]
+            return node
+
+        def memorylen_expr(self, node):
+            node = L(node)
+            node.type = "u"
+            node.code = ["MEMORYLEN"]
+            return node
+
         def comparison(self, node):
             node = L(node)
             print("cmp", node)
             leftType, rightType = ensurePrimitive("cmp", node[0], node[2])
             node.code = []
 
-            node.code += pushExpr(node[0])
-            node.code += pushExpr(node[2])
-            node.code += ["SUB"]
-            if node[1].value == '!=':
-                node.code += ["NOT"]
+            cmp = node[1].value
 
+            if cmp in ["!=", "=="]:
+                node.code += pushExpr(node[0])
+                node.code += pushExpr(node[2])
+                node.code += ["SUB"]
+                if cmp == "==":
+                    node.code += ["NOT"]
+            elif cmp == "<":
+                node.code += pushExpr(node[0])
+                node.code += pushExpr(node[2])
+                node.code += ["CMP"]
+                node.code += ["NOT"]
+            elif cmp == ">=":
+                node.code += pushExpr(node[2])
+                node.code += pushExpr(node[0])
+                node.code += ["CMP"]
+            elif cmp == ">":
+                node.code += pushExpr(node[0])
+                node.code += pushExpr(node[2])
+                node.code += ["CMP"]
+                node.code += ["NOT"]
+            elif cmp == "<=":
+                node.code += pushExpr(node[2])
+                node.code += pushExpr(node[0])
+                node.code += ["CMP"]
+            else:
+                abort("Unknown comparison operator %s" % node[1].value, node[1])
+            #print("COMPARISON", cmp, node.code)
             node.type = "u"
             return node
 
@@ -611,8 +728,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
 
         def run(self, node):
             node = L(node)
-            node.code = asm(push(99999999999,99999999999))
-            node.code += node[0].code
+            #node.code = asm("push(99999999999,99999999999)")
+            node.code = pushExpr(node[0])
             node.code += ["RUN"]
             return node
 
@@ -687,33 +804,18 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             return node
 
         def string(self, node):
+            # TODO allocate on heap
             node = L(node)
             node.type = "vector"
             arr = node[0].value[1:-1]
-            i = 0
-            new = []
-            while i < len(arr):
-                c = arr[i]
-                if c == "\\" and i != len(arr)-1:
-                    nxt = arr[i+1]
-                    if nxt == "n":
-                        new.append(ord("\n"))
-                        i += 2
-                    elif nxt == "\\":
-                        new.append(ord("\\"))
-                        i += 2
-                    else:
-                        abort("Invalid string format \\%s" % nxt, node[0])
-                else:
-                    new.append(ord(c))
-                    i += 1
+            new = stringToWords(arr)
             print("String", new)
             node.code = []
-            node.code += asm("alloc(0,%i)" % len(new))
+            node.code += asm("alloc(%i,%i)" % (MEM_HEAP, len(new)))
             for i, c in enumerate(new):
-                node.code += asm("write(0,sub(arealen(0),%i),%i)" % (len(new)-i, c))
+                node.code += asm("write(%i,sub(arealen(%i),%i),%i)" % (MEM_HEAP, MEM_HEAP, len(new)-i, c))
 
-            node.code += asm("push(sub(arealen(0),%i),%i)" % (len(new), len(new)))
+            node.code += asm("push(sub(arealen(%i),%i),%i)" % (MEM_HEAP, len(new), len(new)))
             return node
     # todo add casting
 
@@ -723,9 +825,9 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
 
     return tree
 
-def compile(text):
+def compile(text, path=None):
 
-    clean = text.strip()
+
 
     def errortext(error, msg, node=None):
         out = error + ":\n"
@@ -745,13 +847,6 @@ def compile(text):
     def abort(msg, node=None):
         raise Exception(errortext("Error",msg, node))
 
-    prepped = prep(clean)
-    print(prepped)
-    parsed = l.parse(prepped)
-
-    types = {}
-    funcs = {}
-
     def pairs(tree):
         return [[n.children[0].value,n.children[1].value] for n in tree.children]
 
@@ -759,6 +854,9 @@ def compile(text):
         def start(self, node):
             #print(node)
             print("Collected type definitions and function signatures.")
+
+        def importdef(self, node):
+            imports[node.children[0].value] = {}
 
         def typedef(self, node):
             node = node.children
@@ -784,7 +882,41 @@ def compile(text):
                 "body": getChildByName(node, "funcbody")}
 
     tg = TypeGetter()
-    tg.visit(parsed)
+
+    types = {}
+    funcs = {}
+    imports = {}
+
+    def prepare(text=None, path=None):
+        if text is None and path:
+            with open(path, "r") as f:
+                text = f.read()
+        elif path is None and text:
+            text = text
+        else:
+            print("wat")
+            exit(1)
+        clean = text.strip()
+
+        prepped = prep(clean)
+        print(prepped)
+        parsed = l.parse(prepped)
+
+        tg.visit(parsed)
+
+    prepare(text)
+    if path is None:
+        path = ""
+
+    if len(imports) > 0 and path == None:
+        abort("Have imports but don't know where to look for them. Set the path.")
+
+    for name in imports:
+        fullpath = path+name+".et"
+        if not os.path.exists(fullpath):
+            abort("Tried to import %s but could not find it in the path" % (importname))
+        prepare(path=fullpath)
+        print("Imported %s" % (name))
 
     # Kahn's algorithm (DAG)
 
@@ -829,8 +961,12 @@ def compile(text):
     # Push return address
     code = asm("push(0)")
     # Allocate 0 stack frame
-    code += asm("area")
+    #XXX code += asm("area")
     code += asm("alloc(0,1)")
+    # Create heap area
+    #XXX code += asm("area")
+    for funcname in funcs:
+        code += ["PUSH %i" % nametoint(funcname), "PUSH %s" % funcname, "KEYSET"]
     code += ["PUSH main", "JUMP"]
     code = "\n".join(code) + "\n"
     # TODO Main should be first, or jump to it?
@@ -841,6 +977,9 @@ def compile(text):
         code += func["code"] + "\n"
         offset = len(code)
 
-    print(code)
-    binary = pack(code)
+    #print(code)
+    prebuilt = [0, 0, 10000000, 100000000, 0, 87, 0, 0, 2, 6, 0, 8, 6, 1, 21, 6, 9, 4, 6, 0, 6, 3, 21, 6, 0, 8, 16, 6, 2, 24, 6, 0, 8, 17, 18, 6, 0, 8, 16, 6, 1, 24, 32, 18, 6, 0, 8, 8, 16, 6, 3, 24, 18, 6, 0, 8, 8, 8, 17, 32, 18, 6, 44, 4, 6, 0, 8, 16, 6, 1, 24, 17, 6, 0, 8, 16, 6, 2, 24, 17, 6, 0, 8, 16, 6, 0, 8, 17, 24, 22, 6, 0, 8, 32, 18, 0, 0, 0]
+
+    binary = pack(code,memory=[[],[],[],prebuilt])#See ^XXX^
+    #print(binary.data)
     return binary

@@ -13,6 +13,13 @@ with open(sys.argv[1], "r") as f:
 binary = compile(source)
 print(binary)
 
+"""
+LAST THING I DID
+CANT JUST ALLOCATE STRINGS DYNAMICALLY AT END OF FRAME
+change frame layout, put pointers at the start, dont use arealen as often
+
+"""
+
 binary.write(path)
 
 if "debug" in sys.argv:

@@ -18,6 +18,10 @@ except ImportError:
     def assert_green(x): pass
     def set_param(driver, name, value): pass
 
+from time import sleep
+from numeric import tcr
+#from copy import deepcopy
+
 BYTESIZE = 8
 WORDSIZE = 4*BYTESIZE
 WMAX = 2**WORDSIZE
@@ -27,12 +31,13 @@ STATUS, REC, GAS, MEM, IP = range(5)
 HEAD, CODE, STACK, MAP, MEMORY = range(5)
 F_STATUS, F_REC, F_GAS, F_MEM, F_IP, F_LENCODE, F_LENSTACK, F_LENMAP, F_LENMEMORY, F_CODE, F_STACK, F_MAP, F_MEMORY = range(13)
 
-NORMAL, FROZEN, VOLHALT, VOLRETURN, OOG, OOC, OOS, OOM, OOB, UOC, RECURSE = range(11)
-STATI = ["NORMAL", "FROZEN", "VOLHALT", "VOLRETURN", "OUTOFGAS", "OUTOFCODE", "OUTOFSTACK", "OUTOFMEMORY", "OUTOFBOUNDS", "UNKNOWNCODE", "RUN"]
+NORMAL, FROZEN, VOLHALT, VOLRETURN, VOLYIELD, OOG, OOC, OOS, OOM, OOB, UOC, RECURSE = range(12)
+#STATI = ["NORMAL", "FROZEN", "VOLHALT", "VOLRETURN", "VOLYIELD", "OUTOFGAS", "OUTOFCODE", "OUTOFSTACK", "OUTOFMEMORY", "OUTOFBOUNDS", "UNKNOWNCODE", "RUN"]
+STATI = ["NOR", "FRZ", "HLT", "RET", "YLD" "OOG", "OOC", "OOS", "OOM", "OOB", "UOC", "REC"]
 
-HALT, RETURN, YIELD, RUN, JUMP, JZ, PUSH, POP, DUP, FLIP, KEYSET, KEYHAS, KEYGET, KEYDEL, STACKLEN, MEMORYLEN, AREALEN, READ, WRITE, AREA, DEAREA, ALLOC, DEALLOC, ADD, SUB, NOT, MUL, DIV, MOD, SHA256, ECVERIFY, ROT, ROT2 = range(33)
+HALT, RETURN, YIELD, RUN, JUMP, JUMPR, JZ, JZR, PUSH, POP, DUP, FLIP, KEYSET, KEYHAS, KEYGET, KEYDEL, STACKLEN, MEMORYLEN, AREALEN, READ, WRITE, AREA, DEAREA, ALLOC, DEALLOC, ADD, SUB, NOT, MUL, DIV, MOD, SHA256, ECVERIFY, ROT, ROT2, CMP = range(36)
 
-INSTR = ["HALT", "RETURN", "YIELD", "RUN", "JUMP", "JZ", "PUSH", "POP", "DUP", "FLIP", "KEYSET", "KEYHAS", "KEYGET", "KEYDEL", "STACKLEN", "MEMORYLEN", "AREALEN", "READ", "WRITE", "AREA", "DEAREA", "ALLOC", "DEALLOC", "ADD", "SUB", "NOT", "MUL", "DIV", "MOD", "SHA256", "ECVERIFY", "ROT", "ROT2"]
+INSTR = ["HALT", "RETURN", "YIELD", "RUN", "JUMP", "JUMPR", "JZ", "JZR", "PUSH", "POP", "DUP", "FLIP", "KEYSET", "KEYHAS", "KEYGET", "KEYDEL", "STACKLEN", "MEMORYLEN", "AREALEN", "READ", "WRITE", "AREA", "DEAREA", "ALLOC", "DEALLOC", "ADD", "SUB", "NOT", "MUL", "DIV", "MOD", "SHA256", "ECVERIFY", "ROT", "ROT2", "CMP"]
 
 REQS = [
     # Name, Instruction length, Required Stack Size, Stack effect, Gas cost
@@ -40,31 +45,34 @@ REQS = [
     [1,0,0,1],
     [1,0,0,1],
 
-    [1,3,-3,0],
+    [1,1,-1,0],
 
+    [1,1,-1,1],#jumps
     [1,1,-1,1],
+    [1,2,-2,1],
     [1,2,-2,1],
 
     [2,0,1,2],
-    [1,0,0,2],
+    [1,0,-1,2],#XXX changed stack effect
+
     [1,0,1,4],
     [1,2,0,4],
 
-    [1,2,-2,10],
+    [1,2,-2,10],#keys
     [1,1,0,4],
     [1,1,0,6],
     [1,1,-1,4],
 
-    [1,0,1,2],
+    [1,0,1,2],#lens
     [1,0,1,2],
     [1,1,0,2],
 
-    [1,2,-1,2],
+    [1,2,-1,2],#r/w
     [1,3,-3,2],
 
-    [1,0,1,10],
+    [1,0,1,10],#a/d
     [1,1,-1,10],#!use after free!
-    [1,2,-2,10],
+    [1,2,-2,10],#alloc/dealloc
     [1,2,-2,10],
 
     [1,2,-1,6],
@@ -79,6 +87,8 @@ REQS = [
 
     [1,3,0,10],
     [1,3,0,10],
+
+    [1,2,-1,10],
 ]
 
 #@elidable
@@ -136,7 +146,7 @@ def d(flat):
     return sharp
 
 #@unroll_safe
-def next(state, jump=-1):
+def next(state, jump=-1, relative=False):
     """Pops arguments. Sets the instruction pointer"""
     instr = state[CODE][state[HEAD][IP]]
     reqs = REQS[instr]
@@ -148,6 +158,11 @@ def next(state, jump=-1):
     if jump == -1:
         state[HEAD][IP] += reqs[0]
     else:
+        if relative:
+            #print("J=", tcr(jump, WORDSIZE))
+            jump = (state[HEAD][IP] + tcr(jump, WORDSIZE)) % WMAX
+        #print(state[HEAD][IP], jump)
+
         state[HEAD][IP] = jump
 
 # The following functions should have no or one side effect. If one, either
@@ -198,6 +213,8 @@ def hasmem(state, mem):
         state[HEAD][STATUS] = OOM
         return False
 
+trace = []
+
 def run(binary, gas=100, mem=100, debug=False):
 
     binary[STATUS] = NORMAL
@@ -217,8 +234,8 @@ def run(binary, gas=100, mem=100, debug=False):
         ip = -1
         instr = -1
         reqs = [0,0,0,0]
-
-        if state[HEAD][STATUS] != NORMAL and state[HEAD][STATUS] != RECURSE:
+        #print(state[HEAD])
+        if state[HEAD][STATUS] != NORMAL and state[HEAD][REC] == 0:
             jump_back = len(states)-2
 
 
@@ -232,6 +249,7 @@ def run(binary, gas=100, mem=100, debug=False):
         else:
             # Check if current instruction pointer is within code bounds
             ip = state[HEAD][IP]
+            trace.append(ip)
             if ip >= len(state[CODE]):
                 state[HEAD][STATUS] = OOC
                 jump_back = len(states)-2
@@ -239,11 +257,11 @@ def run(binary, gas=100, mem=100, debug=False):
 
                 instr = state[CODE][ip]
 
-                if debug:
-                    print(state[STACK])
-                    if len(state) > MEMORY:
-                        print(state[MEMORY])
-                    print(ip, INSTR[instr])
+                #if debug:
+                    #print("STACK", state[STACK])
+                    #if len(state) > MEMORY:
+                    #    print("MEMORY", state[MEMORY:])
+                #    print(ip, INSTR[instr])
 
                 reqs = REQS[instr]
 
@@ -269,68 +287,87 @@ def run(binary, gas=100, mem=100, debug=False):
                     jump_back = i-1
                     break
 
-
-
+        #for st in states:
+        #    print(st[HEAD])
+        #if len(states)>1:
+        #    print(jump_back,len(states), INSTR[instr], state[HEAD])
         if jump_back > -2:
             if debug:
                 print("<<<", jump_back)
+                #print(states[0][HEAD])
+                pass
             serialized = None
             for i in range(len(states)-1, jump_back, -1):
+                serialized = s(states[i])
                 if i!=0:
-                    states[len(states)-i-1][MEMORY+edges[len(edges)-i]] = serialized
-                serialized = s(states[len(states)-i-1])
+                    #print(i, edges)
+                    states[i-1][MEMORY+edges[len(edges)-i]] = serialized
+                    states[i-1][HEAD][REC] = 0
+                    states[i-1][HEAD][IP] += 0
+                    states = states[:-1]
+                    edges = edges[:-1]
+                    sizes = sizes[:-1]
                 #if i==jump_back-1:
                 #    #states[i].status = OOG
+                #print("First\n", i, states[0][HEAD])
+                #if len(states) > 1:
+                #    print(states[1][HEAD])
                 if i==0:
-                    if debug:
-                        print("STACK:",states[0][STACK])
-                        print("MEMORY:",states[0][MEMORY])
+                    #if debug:
+                    #    print("STACK:",states[0][STACK])
+                    #    print("MEMORY:",states[0][MEMORY])
                     return serialized
 
                 if i==jump_back-1:
                     break
 
+        if debug:
+            print("".join(["<-|%s¦%s¦%s|%s|%s¦%s" % (STATI[states[i][HEAD][STATUS]], str(states[i][HEAD][GAS]//10**6), str(states[i][HEAD][MEM]//10**6), states[i][HEAD][IP], states[i][STACK], INSTR[states[i][CODE][states[i][HEAD][IP]]]) for i in range(len(states))]))
+
 
         if jump_back > -2:
             pass
         elif instr == RUN:
-            area = state[STACK][-3]
-            gas = state[STACK][-2]
-            mem = state[STACK][-1]
+            #area = state[STACK][-3]
+            #gas = state[STACK][-2]
+            #mem = state[STACK][-1]
+            area = state[STACK][-1]
+            #print(state[STACK])
             if validarea(state, area) and len(state[MEMORY+area]) > 4:#HEADERLEN
                 child = state[MEMORY+area]
-
+                #for mi, m in enumerate(state[MEMORY:]):
+                #    print(mi, m)
                 if state[HEAD][REC] == 0:
-                    child[STATUS] = NORMAL
-                    child[GAS] = gas
-                    child[MEM] = mem
+                    #XXX child[STATUS] = NORMAL
+                    #child[GAS] = gas
+                    #child[MEM] = mem
+                    states.append(d(state[MEMORY+area]))
 
+                    edges.append(area)
+                    sizes.append(len(state[MEMORY+area]))
+                    state[MEMORY+area] = None
                     state[HEAD][REC] = area + 1
 
+                    if debug:
+                        print(">>>", child[STATUS])
 
-                if state[HEAD][REC] > 0 and child[STATUS] == NORMAL:
 
-                    #print(">>>")
-                    #state[MEMORY+area] = step(state[MEMORY+area])
-                    #print(state[MEMORY], area)
-                    states.append(d(state[MEMORY+area]))
-                    edges.append(state[HEAD][REC])
-                    sizes.append(len(state[MEMORY+area]))
-                    #print("<<<")
-                else:
+                # XXX do i need this?
+                if state[HEAD][REC] > 0 and child[STATUS] != NORMAL:
                     #child[STATUS] = FROZEN
-                    #may not be required
+                    #XXX may not be required
                     state[HEAD][REC] = 0
                     next(state)
             else:
                 #checkresources here?
                 next(state)
         else:
-            if debug:
-                print("".join(["<-|%s¦%s¦%s|%s" % (STATI[states[i][HEAD][STATUS]], str(states[i][HEAD][GAS]), str(states[i][HEAD][MEM]), INSTR[states[i][CODE][states[i][HEAD][IP]]]) for i in range(len(states))]))
+                #print("\n".join(str(m) for m in states[0][MEMORY:]))
+
+                #sleep(0.1)
+                #print(state[MEMORY])
             #print("".join(["%i;%i" % (states[i][0][GAS], states[i][0][MEM]) for i in range(len(states))]))
             stacklen = len(state[STACK])
-
             if instr == HALT:
                 state[HEAD][STATUS] = VOLHALT
                 next(state)
@@ -338,7 +375,7 @@ def run(binary, gas=100, mem=100, debug=False):
                 state[HEAD][STATUS] = VOLRETURN
                 state[HEAD][IP] = 0
             elif instr == YIELD:
-                state[HEAD][STATUS] = VOLRETURN
+                state[HEAD][STATUS] = VOLYIELD
                 next(state)
             elif instr == JUMP:
                 next(state, top(state))
@@ -346,6 +383,14 @@ def run(binary, gas=100, mem=100, debug=False):
                 if state[STACK][-2] == 0:
                     jitdriver.can_enter_jit(ip=state[HEAD][IP], code=state[CODE], state=states, edges=edges, sizes=sizes)
                     next(state, top(state))
+                else:
+                    next(state)
+            elif instr == JUMPR:
+                next(state, top(state), relative=True)
+            elif instr == JZR:
+                if state[STACK][-2] == 0:
+                    jitdriver.can_enter_jit(ip=state[HEAD][IP], code=state[CODE], state=states, edges=edges, sizes=sizes)
+                    next(state, top(state), relative=True)
                 else:
                     next(state)
             elif instr == PUSH:
@@ -386,7 +431,9 @@ def run(binary, gas=100, mem=100, debug=False):
                 for i in range(0, len(state[MAP]), 2):
                     if state[MAP][i] == state[STACK][-1]:
                         state[STACK][-1] = state[MAP][i+1]
+                        break
                 else:
+                    print("failed")
                     state[STACK].pop(-1)
                     state[HEAD][MEM] += 1
                 next(state)
@@ -423,6 +470,7 @@ def run(binary, gas=100, mem=100, debug=False):
                     state[MEMORY+area][addr] = value
                     next(state)
             elif instr == AREA:
+                #sleep(1)
                 # This should cost 1 mem
                 if hasmem(state, 1):
                     state.append([])
@@ -435,11 +483,18 @@ def run(binary, gas=100, mem=100, debug=False):
             elif instr == ALLOC:
                 area, size = state[STACK][stacklen-2], state[STACK][stacklen-1]
                 # Technically, -2
-                if hasmem(state, size):
-                    if validarea(state, area):
-                        state[HEAD][MEM] -= size
-                        state[MEMORY+area] += [0] * size
-                        next(state)
+
+                #print("ALLOC", len(state), area, MEMORY)
+                if len(state) > MEMORY+area:
+                    if hasmem(state, size):
+                        if validarea(state, area):
+                            state[HEAD][MEM] -= size
+                            state[MEMORY+area] += [0] * size
+                            next(state)
+                else:
+                    #error?
+                    state[HEAD][STATUS] = OOB
+                    pass
             elif instr == DEALLOC:
                 area, size = state[STACK][stacklen-2], state[STACK][stacklen-1]
                 if validarea(state, area):
@@ -454,7 +509,7 @@ def run(binary, gas=100, mem=100, debug=False):
                         state[HEAD][STATUS] = OOB
             elif instr == ADD:
                 op1, op2 = state[STACK][stacklen-2], state[STACK][stacklen-1]
-                state[STACK][stacklen-2] = op1 + op2
+                state[STACK][stacklen-2] = (op1 + op2) % WMAX
                 next(state)
             elif instr == SUB:
                 op1, op2 = state[STACK][stacklen-2], state[STACK][stacklen-1]
@@ -497,6 +552,14 @@ def run(binary, gas=100, mem=100, debug=False):
                 state[STACK][stacklen-2] = first
                 state[STACK][stacklen-3] = second
                 next(state)
+            elif instr == CMP:
+                first = state[STACK][stacklen-1]
+                second = state[STACK][stacklen-2]
+                if first < second:
+                    state[STACK][stacklen-2] = 0
+                else:
+                    state[STACK][stacklen-2] = 1
+                next(state)
             else:
                 state[HEAD][STATUS] = UOC
 
@@ -505,7 +568,7 @@ def run(binary, gas=100, mem=100, debug=False):
         #Finalize
         memdelta = 4 - sizes[-1]
         for i in range(len(state)):
-            memdelta += len(state[i])
+            memdelta += 1#XXX#sizes[i]#len(state[i])
         #print(memdelta)
         for i in range(len(states)):
             sizes[i] += memdelta
@@ -558,17 +621,27 @@ def entry_point(argv):
     t = time.time()
     while True:
         ret = run(flat, gas, mem, debug=debug)
-        time.sleep(0.5)
+        #time.sleep(0.1)
         sharp = d(ret)
+        #print(trace)
         if sharp[HEAD][STATUS] == VOLHALT:
             break
-        elif sharp[HEAD][STATUS] == VOLRETURN:
-            if sharp[STACK][-2] == 42:
-                #print(sharp[STACK][-1])
-                sys.stdout.write(chr(sharp[STACK][-1]))
-                sys.stdout.flush()
+        elif sharp[HEAD][STATUS] == VOLYIELD:
+            #print(len(sharp))
+            sharp[HEAD][STATUS] = NORMAL
+            if len(sharp)-MEMORY>0:
+                #print(sharp[MEMORY:])
+                if sharp[MEMORY+2][0] == 42:
+                    #print(sharp[STACK][-1])
+                    sys.stdout.write(chr(sharp[MEMORY+2][1]))
+                    sys.stdout.flush()
+                    sharp[MEMORY+2] = []
+                #sharp = sharp[:-1]
 
             sharp[STACK] = sharp[STACK][:-2]
+        else:
+            print(sharp[HEAD])
+            break
         flat = s(sharp)
 
     print(time.time()-t)

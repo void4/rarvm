@@ -1,19 +1,5 @@
-typ vector {u start, u length}
-
-def putc(u char):
-    yield {42,char}
-
-def print(vector string):
-    i = 0
-    while i != string.length:
-        putc(read(string.start+i))
-        i = i + 1
-
-def println(vector string):
-    print(string)
-    print("\n")
+import stdio
+import sandbox
 
 def main() -> (u):
-    #var has same name as func!
-    a = "hello, world!"
-    println(a)
+    e = run(3,1000,100000)

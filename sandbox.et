@@ -1,0 +1,38 @@
+import stdio
+
+def run(u ar, u gas, u mem) -> (u):
+    println("area:")
+    printiln(ar)
+    println("gas:")
+    printiln(gas)
+    println("mem:")
+    printiln(mem)
+    a = gas
+    b = gas
+    #while:
+    println("Running sandbox...")
+    $write(ar, 2, gas)
+    $write(ar, 3, mem)
+    $run(ar)
+    state = $read(ar,0)
+    print("Sandboxed process halted with state: ")
+    printiln(state)
+    #elif state
+    if state == 3:
+        println("It has returned!")
+        return 1
+
+    if state == 4:
+        println("It has yielded!")
+        memareas = $read(ar,8)
+        areaoffset = $read(ar,8+memareas-1)
+        iostate = $read(ar, areaoffset)
+    else:
+        println("Error!")
+
+        return 0
+
+#def getReturnValues(u area):
+
+def destroy(u area):
+    $dealloc(area, $arealen(area))

@@ -1,4 +1,5 @@
-from vm import INSTR, PUSH
+from vm import INSTR, PUSH, WMASK, WORDSIZE
+from numeric import tc
 import sys
 
 opcodes = [instr.lower() for instr in INSTR]
@@ -42,13 +43,14 @@ def assemble(text):
 	if isinstance(text, str):
 		text = text.split("\n")
 	text_unopt = "\n".join(text)
+	#XXX Don'T HAVE TO CHANGE JUMP LABELS HERE because that happens after optimization
 	text_opt = text
 	for i in range(5):
-	    text_opt = optimize(text_opt)
+		text_opt = optimize(text_opt)
 	text_opt = "\n".join(text_opt)
 	#print(text_opt)
 	asm = translate(text_opt, True)
-	print("Optimized:", len(asm), "Unoptimized:", len(translate(text_unopt)))
+	#print("Optimized:", len(asm), "Unoptimized:", len(translate(text_unopt)))
 	return asm
 
 def translate(text, debug=False):
@@ -80,6 +82,10 @@ def translate(text, debug=False):
 			labels[label] = {"opc":opcounter}
 			ignore = True
 			line["type"] = "label"
+		elif opline[0] == "pushr":
+			opcounter += 1
+			ignore = False
+			line["type"] = "code"
 		elif opline[0] in opcodes:#meh
 			opcounter += 1
 			ignore = False
@@ -95,7 +101,7 @@ def translate(text, debug=False):
 		if line["ignore"]:
 			continue
 		op = line["opline"][0]
-		if op == "push":
+		if op in ["push", "pushr"]:
 			line["code"] = [PUSH, intorlabel(line["opline"][1])]
 		elif op in opcodes:
 			line["code"] = [opcodes.index(op)]
@@ -117,13 +123,28 @@ def translate(text, debug=False):
 			print(line["offset"], line["opline"])
 		if line["type"] == "code" and line["opline"][0] in ["jz", "jump"]:
 			if len(line["opline"]) == 2 and not isinstance(line["opline"][1], int):
-				line["code"] = [PUSH, labels[line["opline"][1]]] + line["code"]
+				#labeloffset = labels[line["opline"][1]]
+				#print("Relative offset %i" % (labeloffset))
+				print("Deprecated")
+				exit(1)
+				line["code"] = [PUSH, labeloffset] + line["code"]
 
 	# Lastly, replace all labels with offsets
+
 	total = []
 	for line in lines:
 		if line["type"] == "code":
-			line["code"] = [labels[exp] if exp in labels else exp for exp in line["code"]]
+			#print(tc(labels[exp]-line["offset"]-2, WORDSIZE))
+			#line["code"] = [tc(labels[exp]-line["offset"]-2, WORDSIZE) if exp in labels else exp for exp in line["code"]]
+			#line["code"] = [labels[exp] if exp in labels else exp for exp in line["code"]]
+			last = line["code"][-1]
+			if last in labels:
+				if line["opline"][0] == "pushr":
+					#print(line["offset"]+2, labels[last], last, labels[last]-line["offset"]-2)
+					line["code"][0] = opcodes.index("push")
+					line["code"][-1] = tc(labels[last]-line["offset"]-2, WORDSIZE)
+				else:
+					line["code"][-1] = labels[last]
 			total += line["code"]
 
 	print(labels)
@@ -142,7 +163,7 @@ def translate(text, debug=False):
 
 def pack(code, stack=[], memory=[]):
 	code = assemble(code)
-	binary = [0,0,1000,1000,0,len(code),len(stack),0,len(memory)] + code + stack + sum([[len(area)]+area for area in memory], [])
+	binary = [0,0,10000000,100000000,0,len(code),len(stack),0,len(memory)] + code + stack + sum([[len(area)]+area for area in memory], [])
 	return Binary(binary)
 
 class Binary:
@@ -169,6 +190,8 @@ if __name__ == "__main__":
 		text = f.read()
 
 	binary = pack(text)
+
+	#print(binary.data)
 
 	if len(sys.argv) > 2:
 		binary.write(sys.argv[2])
