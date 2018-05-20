@@ -23,21 +23,21 @@ from numeric import tcr
 #from copy import deepcopy
 
 BYTESIZE = 8
-WORDSIZE = 4*BYTESIZE
+WORDSIZE = 8*BYTESIZE
 WMAX = 2**WORDSIZE
 WMASK = WMAX-1
 
 STATUS, REC, GAS, MEM, IP = range(5)
-HEAD, CODE, STACK, MAP, MEMORY = range(5)
-F_STATUS, F_REC, F_GAS, F_MEM, F_IP, F_LENCODE, F_LENSTACK, F_LENMAP, F_LENMEMORY, F_CODE, F_STACK, F_MAP, F_MEMORY = range(13)
+HEAD, STACK, MAP, MEMORY = range(4)
+F_STATUS, F_REC, F_GAS, F_MEM, F_IP, F_LENSTACK, F_LENMAP, F_LENMEMORY, F_STACK, F_MAP, F_MEMORY = range(11)
 
 NORMAL, FROZEN, VOLHALT, VOLRETURN, VOLYIELD, OOG, OOC, OOS, OOM, OOB, UOC, RECURSE = range(12)
 #STATI = ["NORMAL", "FROZEN", "VOLHALT", "VOLRETURN", "VOLYIELD", "OUTOFGAS", "OUTOFCODE", "OUTOFSTACK", "OUTOFMEMORY", "OUTOFBOUNDS", "UNKNOWNCODE", "RUN"]
-STATI = ["NOR", "FRZ", "HLT", "RET", "YLD" "OOG", "OOC", "OOS", "OOM", "OOB", "UOC", "REC"]
+STATI = ["NOR", "FRZ", "HLT", "RET", "YLD", "OOG", "OOC", "OOS", "OOM", "OOB", "UOC", "REC"]
 
-HALT, RETURN, YIELD, RUN, JUMP, JUMPR, JZ, JZR, PUSH, POP, DUP, FLIP, KEYSET, KEYHAS, KEYGET, KEYDEL, STACKLEN, MEMORYLEN, AREALEN, READ, WRITE, AREA, DEAREA, ALLOC, DEALLOC, ADD, SUB, NOT, MUL, DIV, MOD, SHA256, ECVERIFY, ROT, ROT2, CMP = range(36)
+HALT, RETURN, YIELD, RUN, JUMP, JUMPR, JZ, JZR, PUSH, POP, DUP, FLIP, KEYSET, KEYHAS, KEYGET, KEYDEL, STACKLEN, MEMORYLEN, AREALEN, READ, WRITE, AREA, DEAREA, ALLOC, DEALLOC, ADD, SUB, NOT, MUL, DIV, MOD, SHA256, ECVERIFY, ROT, ROT2, CMP, HEADER = range(37)
 
-INSTR = ["HALT", "RETURN", "YIELD", "RUN", "JUMP", "JUMPR", "JZ", "JZR", "PUSH", "POP", "DUP", "FLIP", "KEYSET", "KEYHAS", "KEYGET", "KEYDEL", "STACKLEN", "MEMORYLEN", "AREALEN", "READ", "WRITE", "AREA", "DEAREA", "ALLOC", "DEALLOC", "ADD", "SUB", "NOT", "MUL", "DIV", "MOD", "SHA256", "ECVERIFY", "ROT", "ROT2", "CMP"]
+INSTR = ["HALT", "RETURN", "YIELD", "RUN", "JUMP", "JUMPR", "JZ", "JZR", "PUSH", "POP", "DUP", "FLIP", "KEYSET", "KEYHAS", "KEYGET", "KEYDEL", "STACKLEN", "MEMORYLEN", "AREALEN", "READ", "WRITE", "AREA", "DEAREA", "ALLOC", "DEALLOC", "ADD", "SUB", "NOT", "MUL", "DIV", "MOD", "SHA256", "ECVERIFY", "ROT", "ROT2", "CMP", "HEADER"]
 
 REQS = [
     # Name, Instruction length, Required Stack Size, Stack effect, Gas cost
@@ -89,6 +89,8 @@ REQS = [
     [1,3,0,10],
 
     [1,2,-1,10],
+
+    [1,1,0,10],
 ]
 
 #@elidable
@@ -96,11 +98,9 @@ def s(sharp):
     """Flattens and serializes the nested state structure"""
     flat = [] #!!! new list
     flat += sharp[HEAD]
-    flat += [len(sharp[CODE])]
     flat += [len(sharp[STACK])]
     flat += [len(sharp[MAP])]
     flat += [len(sharp)-MEMORY]
-    flat += sharp[CODE]
     flat += sharp[STACK]
     for i in range(0, len(sharp[MAP]), 2):
         k = sharp[MAP][i]
@@ -114,30 +114,26 @@ def s(sharp):
 #@elidable
 def d(flat):
     """Deserializes and restores the runtime state structure from the flat version"""
+
     sharp = []
-    sharp.append(flat[:F_LENCODE])
-    lencode = flat[F_LENCODE]
+    sharp.append(flat[:F_LENSTACK])
     lenstack = flat[F_LENSTACK]
     lenmap = flat[F_LENMAP]
     lenmemory = flat[F_LENMEMORY]
     offset = F_LENMEMORY+1
     assert offset >= 0
-    assert lencode >= 0
     assert lenstack >= 0
     assert lenmap >= 0
     assert lenmemory >= 0
-    sharp.append(flat[offset:offset+lencode])
-    offset += lencode
     sharp.append(flat[offset:offset+lenstack])
     offset += lenstack
-    hmap = flat[offset:offset+lenmap]
+    sharp.append(flat[offset:offset+lenmap])
     offset += lenmap
-    #hmap = list(zip(hmap[::2], hmap[1::2]))
-    sharp.append(hmap)
-
-    #print(lencode, lenstack, lenmemory)
+    #print(lenstack, lenmap, lenmemory)
     index = offset
+    #print(flat, len(flat))
     for area in range(lenmemory):
+        #print(index, lenmemory)
         lenarea = flat[index]
         assert index >= 0
         assert lenarea >= 0
@@ -148,7 +144,7 @@ def d(flat):
 #@unroll_safe
 def next(state, jump=-1, relative=False):
     """Pops arguments. Sets the instruction pointer"""
-    instr = state[CODE][state[HEAD][IP]]
+    instr = state[MEMORY][state[HEAD][IP]]
     reqs = REQS[instr]
     if reqs[2] < 0:
         for i in range(-reqs[2]):
@@ -225,9 +221,11 @@ def run(binary, gas=100, mem=100, debug=False):
     edges = [0]
     sizes = [len(binary)]
     while True:
-        jitdriver.jit_merge_point(ip=states[-1][HEAD][IP], code=states[-1][CODE], state=states, edges=edges, sizes=sizes)
+        #XXX debug = len(states) > 1
+        #TODO jitdriver.jit_merge_point(ip=states[-1][HEAD][IP], code=states[-1][CODE], state=states, edges=edges, sizes=sizes)
         state = states[-1]
         #print(state)
+        #print("\n"*5)
         #print(state)
         jump_back = -2
 
@@ -250,23 +248,24 @@ def run(binary, gas=100, mem=100, debug=False):
             # Check if current instruction pointer is within code bounds
             ip = state[HEAD][IP]
             trace.append(ip)
-            if ip >= len(state[CODE]):
+            if len(state) < MEMORY + 1 or ip >= len(state[MEMORY]):
                 state[HEAD][STATUS] = OOC
                 jump_back = len(states)-2
             else:
 
-                instr = state[CODE][ip]
-
+                instr = state[MEMORY][ip]
+                #if debug:
+                #    print(instr)
+                #    print(INSTR[instr])
                 #if debug:
                     #print("STACK", state[STACK])
                     #if len(state) > MEMORY:
                     #    print("MEMORY", state[MEMORY:])
                 #    print(ip, INSTR[instr])
-
                 reqs = REQS[instr]
 
                 # Check if extended instructions are within code bounds
-                if ip + reqs[0] - 1 >= len(state[CODE]):
+                if ip + reqs[0] - 1 >= len(state[MEMORY]):
                     state[HEAD][STATUS] = OOC
                     jump_back = len(states)-2
 
@@ -322,8 +321,9 @@ def run(binary, gas=100, mem=100, debug=False):
                     break
 
         if debug:
-            print("".join(["<-|%s¦%s¦%s|%s|%s¦%s" % (STATI[states[i][HEAD][STATUS]], str(states[i][HEAD][GAS]//10**6), str(states[i][HEAD][MEM]//10**6), states[i][HEAD][IP], states[i][STACK], INSTR[states[i][CODE][states[i][HEAD][IP]]]) for i in range(len(states))]))
-
+            print("".join(["<-|%s¦%s¦%s|%s|%s¦%s" % (STATI[states[i][HEAD][STATUS]], str(states[i][HEAD][GAS]//10**6), str(states[i][HEAD][MEM]//10**6), states[i][HEAD][IP], states[i][STACK], INSTR[states[i][MEMORY][states[i][HEAD][IP]]]) for i in range(len(states))]))
+            if len(states[0]) > MEMORY+1:
+                print(states[0][MEMORY+1])
 
         if jump_back > -2:
             pass
@@ -363,7 +363,9 @@ def run(binary, gas=100, mem=100, debug=False):
                 next(state)
         else:
                 #print("\n".join(str(m) for m in states[0][MEMORY:]))
-
+            if debug and len(states) > 1:
+                print(state[STACK])
+                print(state[MEMORY+1:])
                 #sleep(0.1)
                 #print(state[MEMORY])
             #print("".join(["%i;%i" % (states[i][0][GAS], states[i][0][MEM]) for i in range(len(states))]))
@@ -381,7 +383,7 @@ def run(binary, gas=100, mem=100, debug=False):
                 next(state, top(state))
             elif instr == JZ:
                 if state[STACK][-2] == 0:
-                    jitdriver.can_enter_jit(ip=state[HEAD][IP], code=state[CODE], state=states, edges=edges, sizes=sizes)
+                    jitdriver.can_enter_jit(ip=state[HEAD][IP], code=state[MEMORY], state=states, edges=edges, sizes=sizes)
                     next(state, top(state))
                 else:
                     next(state)
@@ -389,12 +391,12 @@ def run(binary, gas=100, mem=100, debug=False):
                 next(state, top(state), relative=True)
             elif instr == JZR:
                 if state[STACK][-2] == 0:
-                    jitdriver.can_enter_jit(ip=state[HEAD][IP], code=state[CODE], state=states, edges=edges, sizes=sizes)
+                    jitdriver.can_enter_jit(ip=state[HEAD][IP], code=state[MEMORY], state=states, edges=edges, sizes=sizes)
                     next(state, top(state), relative=True)
                 else:
                     next(state)
             elif instr == PUSH:
-                state[STACK].append(state[CODE][ip+1])
+                state[STACK].append(state[MEMORY][ip+1])
                 next(state)
             elif instr == POP:
                 if len(state[STACK]) > 0:
@@ -461,7 +463,9 @@ def run(binary, gas=100, mem=100, debug=False):
                     state[STACK][-2] = state[MEMORY+area][addr]
                     next(state)
                 else:
+                    print(area, addr)
                     print("INVALIDA")
+
             elif instr == WRITE:
                 area, addr = state[STACK][stacklen-3], state[STACK][stacklen-2]
                 value = state[STACK][stacklen-1]
@@ -559,6 +563,11 @@ def run(binary, gas=100, mem=100, debug=False):
                 else:
                     state[STACK][stacklen-2] = 1
                 next(state)
+            elif instr == HEADER:
+                first = state[STACK][stacklen-1]
+                if first < len(state[HEAD]):
+                    state[STACK][stacklen-1] = state[HEAD][first]
+                next(state)
             else:
                 state[HEAD][STATUS] = UOC
 
@@ -630,14 +639,14 @@ def entry_point(argv):
             sharp[HEAD][STATUS] = NORMAL
             if len(sharp)-MEMORY>0:
                 #print(sharp[MEMORY:])
-                if sharp[MEMORY+2][0] == 42:
+                if sharp[MEMORY+3][0] == 42:
                     #print(sharp[STACK][-1])
-                    sys.stdout.write(chr(sharp[MEMORY+2][1]))
+                    sys.stdout.write(chr(sharp[MEMORY+3][1]))
                     sys.stdout.flush()
-                    sharp[MEMORY+2] = []
+                    sharp[MEMORY+3] = []
                 #sharp = sharp[:-1]
 
-            sharp[STACK] = sharp[STACK][:-2]
+            #XXX sharp[STACK] = sharp[STACK][:-2]
         else:
             print(sharp[HEAD])
             break

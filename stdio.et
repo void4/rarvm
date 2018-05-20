@@ -1,9 +1,9 @@
 typ vector {u start, u length}
 
 def putc(u char):
-    $alloc(2,2)
-    $write(2,0,42)
-    $write(2,1,char)
+    $alloc(3,2)
+    $write(3,0,42)
+    $write(3,1,char)
     yield
 
 def printi(u n):
@@ -19,7 +19,7 @@ def printiln(u n):
 def print(vector string):
     i = 0
     while i != string.length:
-        putc($read(1,string.start+i))
+        putc($read(2,string.start+i))
         i = i + 1
 
 def println(vector string):

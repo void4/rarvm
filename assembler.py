@@ -49,7 +49,7 @@ def assemble(text):
 		text_opt = optimize(text_opt)
 	text_opt = "\n".join(text_opt)
 	#print(text_opt)
-	asm = translate(text_opt, True)
+	asm = translate(text_opt, False)
 	#print("Optimized:", len(asm), "Unoptimized:", len(translate(text_unopt)))
 	return asm
 
@@ -161,7 +161,8 @@ def translate(text, debug=False):
 					line["code"][-1] = labels[last]
 			total += line["code"]
 
-	print(labels)
+	if debug:
+		print(labels)
 
 	"""
 	for i, line in enumerate(lines):
@@ -175,9 +176,10 @@ def translate(text, debug=False):
 	"""
 	return total
 
-def pack(code, stack=[], memory=[]):
-	code = assemble(code)
-	binary = [0,0,10000000,100000000,0,len(code),len(stack),0,len(memory)] + code + stack + sum([[len(area)]+area for area in memory], [])
+def pack(code, stack=[], map=[], memory=[]):
+	#code = assemble(code)
+	memory = [code] + memory
+	binary = [0,0,10000000,100000000,0,len(stack),len(map),len(memory)] + stack + map + sum([[len(area)]+area for area in memory], [])
 	return Binary(binary)
 
 class Binary:
@@ -187,8 +189,9 @@ class Binary:
 		print("Writing to %s" % path)
 		with open(path, "wb") as f:
 			print("%i words." % len(self.data))
-			f.write(struct.pack(">q", len(self.data)))
-			f.write(struct.pack(">%uq" % len(self.data), *self.data))
+			print(self.data)
+			f.write(struct.pack(">Q", len(self.data)))
+			f.write(struct.pack(">%uQ" % len(self.data), *self.data))
 #bfile = open("bytecode.js", "w+")
 #bfile.write("var code = "+str(code))
 #bfile.close()

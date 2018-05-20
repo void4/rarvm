@@ -2,7 +2,7 @@ from lark import Lark, Tree, Transformer
 from lark.tree import Visitor
 from lark.lexer import Token
 
-from assembler import pack
+from assembler import pack, assemble
 from asmutils import asm
 
 from utils import L, kahn, stringToWords, nametoint
@@ -70,7 +70,7 @@ dealloc_stmt: "$dealloc" "(" expr ["," expr] ")"
 ?arith_expr: term (_add_op term)*
 ?term: factor (_mul_op factor)*
 ?factor: _factor_op factor | molecule
-?molecule: read | funcall | atom | arealen_expr | memorylen_expr | keyget_expr |  molecule "[" [expr] "]" -> getitem
+?molecule: read | funcall | atom | arealen_expr | memorylen_expr | keyget_expr | funcname_expr |  molecule "[" [expr] "]" -> getitem
 
 read: "$read" "(" expr ["," expr] ")"
 
@@ -80,6 +80,7 @@ listmaker: test ("," test)* [","]
 arealen_expr: "$arealen" "(" expr ")"
 memorylen_expr: "$memorylen"
 keyget_expr: "$keyget" "(" expr ")"
+funcname_expr: "$funcname" "(" NAME ")"
 
 !_factor_op: "+"|"-"|"~"
 !_add_op: "+"|"-"
@@ -116,7 +117,7 @@ def prep(code):
 
     # Remove indent-dedent pairs
     for i in range(5):
-        lines = lines.replace("<DEDENT>\n<INDENT>", "").replace("<DEDENT><INDENT>", "")
+        lines = lines.replace("<DEDENT>\n\n<INDENT>", "").replace("<DEDENT>\n<INDENT>", "").replace("<DEDENT><INDENT>", "")
 
     return lines
 
@@ -271,7 +272,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
 
     # Get offset relative to stack frame
     def getRelativeOffset(name):
-        offset = retlen
+        offset = 0
+        #retlen
         for v in var:
             if v == name:
                 return offset
@@ -292,16 +294,13 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
         else:
             return []
 
-    def push(offset, page=0):
-        return ["PUSH %i" % page, "PUSH %i" % offset]
-
     def read(offset, page=0):
         return push(offset, page) + ["READ"]
 
     # Get absolute offset in page
     def getAbsoluteOffset(name, index=None):
         offset = getRelativeOffset(name)
-        code = ["PUSH 0"] + push(0,0) + ["READ"]
+        code = ["PUSH %i" % MEM_STACK, "PUSH %i" % MEM_STACK, "PUSH 0", "READ"]
         code += add(offset)
         if index is not None:
             code += add(index)
@@ -327,17 +326,25 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
 
     # Default function cleanup, after return values have been pushed to the stack
     def coda():
+
+        code = []
+
+        # Write return values from stack to memory
+        #for i in range(retlen):
+        #    # Current stack frame
+        #    code += asm("write(%i, add(read(%i,0),%i), rot2)" % (MEM_STACK, MEM_STACK, i))
+
         # Push old return address to stack
-        code = asm("read(0,sub(arealen(0),1))")
+        code += asm("read(%i,sub(arealen(%i),1))" % (MEM_STACK, MEM_STACK))
 
         # Push old stack frame address to stack
-        code += asm("read(0,sub(arealen(0),2))")
+        code += asm("read(%i,sub(arealen(%i),2))" % (MEM_STACK, MEM_STACK))
 
         # Truncate area to current stack frame address
-        code += asm("dealloc(0, sub(arealen(0), read(0,0)))")
+        code += asm("dealloc(%i, sub(arealen(%i), read(%i,0)))" % (MEM_STACK, MEM_STACK, MEM_STACK))#sub , retlen
 
         # Set old stack frame address again
-        code += asm("write(0,0,rot2)")
+        code += asm("write(%i,0,rot2)" % (MEM_STACK))
 
         if funcname == "main":
             #code += asm("pop")
@@ -357,6 +364,15 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
         code += coda()
         return code
 
+    """
+    MEM_STACK layout
+    0:0 - current stack frame address
+
+    expect: arg* |
+    create: arg* | ret* static* last_stack return_addr
+    destroy: arg* ret*
+    """
+
     # Generate code here?
     class TypeAnnotator(Transformer):
         def funcbody(self, node):
@@ -366,19 +382,19 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             #print("RET", func["out"])
 
             # Calculate stack frame size # + return address + stack frame
-            framesize = retlen + varLen() + 2
+            framesize = varLen() + 2#XXX retlen +
 
             # Allocate stack frame
-            node.code += asm("alloc(0,%i)" % framesize)
+            node.code += asm("alloc(%i,%i)" % (MEM_STACK, framesize))
 
             # Write current stack frame address to second last item of stack frame
-            node.code += asm("write(0,sub(arealen(0),2),read(0,0))")
+            node.code += asm("write(%i,sub(arealen(%i),2),read(%i,0))" % (MEM_STACK, MEM_STACK, MEM_STACK))
 
             # Write return address from stack to end of stack frame
-            node.code += asm("write(0,sub(arealen(0),1),rot2)")
+            node.code += asm("write(%i,sub(arealen(%i),1),rot2)" % (MEM_STACK, MEM_STACK))
 
             # Write stack frame address to 0:0
-            node.code += asm("write(0,0,sub(arealen(0), %i))" % framesize)
+            node.code += asm("write(%i,0,sub(arealen(%i), %i))" % (MEM_STACK, MEM_STACK, framesize))
 
             # Put last index of area on stack
             #node.code += ["PUSH 0"]
@@ -452,27 +468,34 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
 
                     node.code += pushExpr(param)
 
-                node.code += asm("alloc(0,%i)" % inTypLen(otherfunc["in"]))
+                node.code += asm("alloc(%i,%i)" % (MEM_STACK, inTypLen(otherfunc["in"])))
                 for i, param in enumerate(node[1].children[::-1]):
                     paramsig = getTypeSignature(param)
                     for index in range(types[paramsig]["len"]):
                         # Write args to end of current stack frame
-                        node.code += asm("push(0,sub(arealen(0),%i))" % (index+i+1))
+                        node.code += asm("push(%i,sub(arealen(%i),%i))" % (MEM_STACK, MEM_STACK, index+i+1))
                         node.code += ["ROT2"]
                         node.code += ["WRITE"]
 
             # Push return address
             # TODO do this dynamically with IP
-            label = generator.label()
-            node.code += ["PUSH %s" % label]
+            # XXX this doesn't work anymore anyway
+
+            #label = generator.label()
+            #node.code += ["PUSH %s" % label]
+            node.code += ["PUSH 4", "HEADER"]
+            node.code += ["PUSH 8", "ADD"]
+            #XXX must add a few for this to work
             # XXX PUSH FUNC___!"§"otherfuncname (collisions)
             #node.code += ["PUSH %s" % otherfuncname, "JUMP"]
             node.code += asm("keyget(%i)" % nametoint(otherfuncname))
             node.code += ["JUMP"]
-            node.code += [label+":"]
+            #node.code += [label+":"]
             # TODO now handle returned values!
+            # Deallocate return values
+            #XXX node.code += asm("dealloc(%i,%i)" % (MEM_STACK, typLen(otherfunc["out"])))
             # Deallocate parameters
-            node.code += asm("dealloc(0,%i)" % (inTypLen(otherfunc["in"])))
+            node.code += asm("dealloc(%i,%i)" % (MEM_STACK, inTypLen(otherfunc["in"])))
             return node
 
         # TODO implement elif
@@ -557,6 +580,7 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
                 abort("Cannot use non 'u' %s as index" % leftType, node[0])
 
             if len(node) == 2:
+                abort("disabled write", node)
                 node.code += ["PUSH 0"]
                 node.code += pushExpr(node[0])
             else:
@@ -633,6 +657,12 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             node = L(node)
             node.type = "u"
             node.code = ["MEMORYLEN"]
+            return node
+
+        def funcname_expr(self, node):
+            node = L(node)
+            node.type = "u"
+            node.code = ["PUSH %i" % nametoint(node[0].value)]
             return node
 
         def comparison(self, node):
@@ -970,29 +1000,39 @@ def compile(text, path=None):
     if not hasmain:
         abort("No main function specified")
 
+    # Create stack, heap and io areas
+    intro = ["AREA", "AREA", "AREA"]
     # Push return address
-    code = asm("push(0)")
+    intro += asm("push(0)")
     # Allocate 0 stack frame
     #XXX code += asm("area")
-    code += asm("alloc(0,1)")
-    # Create heap area
-    #XXX code += asm("area")
-    for funcname in funcs:
-        code += ["PUSH %i" % nametoint(funcname), "PUSH %s" % funcname, "KEYSET"]
-    code += ["PUSH main", "JUMP"]
-    code = "\n".join(code) + "\n"
-    # TODO Main should be first, or jump to it?
-    offset = 0
+    intro += asm("alloc(%i,1)" % MEM_STACK)
+
+    intro += ["PUSH main", "JUMP"]
+    intro = "\n".join(intro) + "\n"
+
+    code = assemble(intro)
+
+    offset = len(code)
     for funcname, func in funcs.items():
-        func["offset"] = offset
-        code += str(len(func["code"])) + "\n"
-        code += funcname+":"+"\n"
-        code += func["code"] + "\n"
+        func["offset"] = offset + 1
+        # Can't do cross-func optimization this way
+        func["code"] = funcname+":"+"\n" + func["code"]
+        func["compiled"] = assemble(func["code"])
+        code += [len(func["compiled"])] + func["compiled"]
+        print(funcname, func["offset"], len(func["compiled"]))
+        #code += str(len(func["code"])) + "\n"#XXX not len of CODE STRING, BUT COMPILED!
+        #
+        #code += func["code"] + "\n"
         offset = len(code)
 
+    code = [funcs["main"]["offset"] if c=="main" else c for c in code]
     #print(code)
-    prebuilt = [0, 0, 10000000, 100000000, 0, 87, 0, 0, 2, 6, 0, 8, 6, 1, 21, 6, 9, 4, 6, 0, 6, 3, 21, 6, 0, 8, 16, 6, 2, 24, 6, 0, 8, 17, 18, 6, 0, 8, 16, 6, 1, 24, 32, 18, 6, 0, 8, 8, 16, 6, 3, 24, 18, 6, 0, 8, 8, 8, 17, 32, 18, 6, 44, 4, 6, 0, 8, 16, 6, 1, 24, 17, 6, 0, 8, 16, 6, 2, 24, 17, 6, 0, 8, 16, 6, 0, 8, 17, 24, 22, 6, 0, 8, 32, 18, 0, 0, 0]
-
-    binary = pack(code,memory=[[],[],[],prebuilt])#See ^XXX^
+    map = []
+    for funcname in funcs:
+        #intro += ["PUSH %i" % nametoint(funcname), "PUSH %s" % funcname, "KEYSET"]
+        map += [nametoint(funcname), funcs[funcname]["offset"]]
+    #print(code)
+    binary = pack(code,[],map)#See ^XXX^
     #print(binary.data)
     return binary

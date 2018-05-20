@@ -86,7 +86,7 @@ def stringToWords(arr):
 
 def nametoint(name):
     b = name.encode("utf8")
-    if len(b)>32:
-        b = b[:32]
-        print("WARNING, only using the first 32 bytes of %s" % name)
+    if len(b)>8:
+        b = b[:8]
+        print("WARNING, only using the first 8 bytes of %s" % name)
     return int.from_bytes(b, byteorder="big")

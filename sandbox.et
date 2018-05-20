@@ -7,28 +7,106 @@ def writeloop(u srca, u srcp, u tgta, u tgtp, u len):
         i = i + 1
 
 def box(u funcname) -> (u):
+    MEM_CODE = 0
     offset = $keyget(funcname)
-    funcsize = $read(0xff, offset-1)#XXX code!
+    funcsize = $read(MEM_CODE, offset-1)#XXX code!
+    print("Funcsize:")
+    printiln(funcsize)
+    printiln(offset)
     # Create new area
     $area
+
     # Area index
     a = $memorylen - 1
+
     # Alloc header
     $alloc(a, 5)
-    # c,s,d,m sizes
-    $alloc(a, 4)
+
+    # s,d,m sizes
+    $alloc(a, 3)
+    # Set lenstack = 1
+    $write(a, $arealen(a)-3, 1)
+    # Set lenmap = 2
+    $write(a, $arealen(a)-2, 2)
+    # Set lenmemory = 4
+    $write(a, $arealen(a)-1, 4)
+
+    # Allocate stack, leave it at 0
+    # Should probably write return address to memory
+    # this might be less efficient, though
+    # Make stack part of memory as well?
+    $alloc(a, 1)
+    # Return address=RETURN opcode
+    $write(a, $arealen(a)-1, 4)
+
+    # Alloc map
+    map = $arealen(a)
+    $alloc(a, 2)
+    # Write map key
+    $write(a, map, funcname)
+    #int.to_bytes(31650994541849710, length=8, byteorder="big")
+
+    $alloc(a, 1)
+
+
+    # Alloc init
+    initsize = 5
+    # Alloc memory area 0 size
+    $write(a, $arealen(a)-1, initsize+1+funcsize)
+    $alloc(a, initsize)
+    #PUSH
+    $write(a, $arealen(a)-5, 8)
+    #funcname
+    $write(a, $arealen(a)-4, funcname)
+    #KEYGET
+    $write(a, $arealen(a)-3, 14)
+    #JUMP
+    $write(a, $arealen(a)-2, 4)
+    #RETURN
+    $write(a, $arealen(a)-1, 1)
+
     # Alloc code
     start = $arealen(a)
-    funcstart = start + 1
+    # Offset within code area
+    funcstart = initsize + 1
+
+    # Write map value
+    $write(a, map+1, funcstart)
+
     $alloc(a, funcsize+1)
     # Write code
-    writeloop(0xff, offset-1, a, start, funclen)
-    # Alloc map
-    start = $arealen(a)
-    $alloc(a, 2)
-    # Write map
-    $write(a, start, funcname)
-    $write(a, start+1, funcstart)
+    writeloop(MEM_CODE, offset-1, a, start, funcsize+1)
+
+    # XXX Haven't allocated other memory areas yet
+
+    return a
+
+def printarea(u area):
+    len = $arealen(area)
+    i = 0
+    while i != len:
+        printi($read(area, i))
+        print(" ")
+        i = i + 1
+    println("")
+
+# Make this a pointer+length later
+def arg(u area, u number):
+    # Allocate MEM_STACK
+    $alloc(area, 3)
+    $write(area, $arealen(area)-3, 2)
+    $write(area, $arealen(area)-2, 0)
+    $write(area, $arealen(area)-1, number)
+    # Allocate empty MEM_HEAP, MEM_IO
+    $alloc(area, 2)
+
+
+def res(u area) -> (u):
+    printarea(area)
+    # Assume subprogram didn't use heap or io
+    # Return values are on stack (coda doesnt write them to memory)
+    return $read(area, 8)
+
 
 def run(u ar, u gas, u mem) -> (u):
     println("area:")
@@ -43,6 +121,7 @@ def run(u ar, u gas, u mem) -> (u):
     println("Running sandbox...")
     $write(ar, 2, gas)
     $write(ar, 3, mem)
+    printarea(ar)
     $run(ar)
     state = $read(ar,0)
     print("Sandboxed process halted with state: ")

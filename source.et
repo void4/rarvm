@@ -1,5 +1,15 @@
 import stdio
 import sandbox
 
+def f(u x) -> (u):
+    return x + 1
+
 def main() -> (u):
-    e = run(3,1000,100000)
+    println("Boxing...")
+    boxed = box($funcname(f))
+    println("Supplying arguments...")
+    arg(boxed, 42)
+    println("Running...")
+    e = run(boxed,100000,100000)
+    println("Printing result...")
+    printiln(res(boxed))
