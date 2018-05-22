@@ -7,9 +7,15 @@ def f(u x) -> (u):
 def main() -> (u):
     println("Boxing...")
     boxed = box($funcname(f))
-    println("Supplying arguments...")
+
+    println("\nSupplying arguments...")
     arg(boxed, 42)
-    println("Running...")
-    e = run(boxed,100000,100000)
-    println("Printing result...")
-    printiln(res(boxed))
+
+    println("\nRunning...")
+    e = run(boxed, 100000, 100000)
+
+    println("\nRetrieving result...")
+    result = res(boxed)
+    
+    print("\nResult:")
+    printiln(result)

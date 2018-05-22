@@ -10,9 +10,9 @@ def box(u funcname) -> (u):
     MEM_CODE = 0
     offset = $keyget(funcname)
     funcsize = $read(MEM_CODE, offset-1)#XXX code!
-    print("Funcsize:")
+    print("-Function size in words: ")
     printiln(funcsize)
-    printiln(offset)
+    #printiln(offset)
     # Create new area
     $area
 
@@ -102,6 +102,7 @@ def arg(u area, u number):
 
 
 def res(u area) -> (u):
+    print("-layout after execution:")
     printarea(area)
     # Assume subprogram didn't use heap or io
     # Return values are on stack (coda doesnt write them to memory)
@@ -109,26 +110,30 @@ def res(u area) -> (u):
 
 
 def run(u ar, u gas, u mem) -> (u):
-    println("area:")
+    print("-area: ")
     printiln(ar)
-    println("gas:")
+    print("-gas: ")
     printiln(gas)
-    println("mem:")
+    print("-mem: ")
     printiln(mem)
     a = gas
     b = gas
     #while:
-    println("Running sandbox...")
+
+    println("-layout before execution:")
+    printarea(ar)
+
+    println("-running sandbox...")
     $write(ar, 2, gas)
     $write(ar, 3, mem)
-    printarea(ar)
+
     $run(ar)
     state = $read(ar,0)
-    print("Sandboxed process halted with state: ")
+    print("-sandboxed process halted with state: ")
     printiln(state)
     #elif state
     if state == 3:
-        println("It has returned!")
+        println("-it has returned normally!")
         return 1
 
     if state == 4:
