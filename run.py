@@ -1,4 +1,4 @@
-from parser import compile
+from compiler import compile
 from vm import entry_point
 
 path = "bin.b"
