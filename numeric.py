@@ -13,8 +13,10 @@ def tcr(val, bits):
     return val                  # return positive value as is
 
 
+"""
 bits = 4
 for i in range(-2**bits//2, 2**bits//2):
     v = tc(i,bits)
     print(v)
     print(tcr(v,bits))
+"""

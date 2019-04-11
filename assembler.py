@@ -186,10 +186,10 @@ class Binary:
 	def __init__(self, data):
 		self.data = data
 	def write(self, path):
-		print("Writing to %s" % path)
+		#print("Writing to %s" % path)
 		with open(path, "wb") as f:
-			print("%i words." % len(self.data))
-			print(self.data)
+			#print("%i words." % len(self.data))
+			#print(self.data)
 			f.write(struct.pack(">Q", len(self.data)))
 			f.write(struct.pack(">%uQ" % len(self.data), *self.data))
 #bfile = open("bytecode.js", "w+")

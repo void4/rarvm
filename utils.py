@@ -53,7 +53,8 @@ def kahn(nodes, edges):
         print("nope, cycle!")
         exit(1)
     else:
-        print("No type cycle detected.")
+        #print("No type cycle detected.")
+        pass
 
 
     indexorder = [None]*len(top_order)

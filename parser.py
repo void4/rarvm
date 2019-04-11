@@ -93,6 +93,8 @@ tuple: [NAME] "{" [expr ("," expr)*] "}"
 attr: NAME "." NAME
 """
 
+DEBUG = False
+
 l = Lark(grammar, debug=True)
 
 def indent(line):
@@ -149,7 +151,8 @@ MEM_HEAP = 2
 MEM_IO = 3
 
 def compile_function(abort, warn, generator, types, funcs, funcname):
-    print("Compiling function %s" % funcname)
+    if DEBUG:
+        print("Compiling function %s" % funcname)
     func = funcs[funcname]
     tree = func["body"]
     intypes = {name: typ for typ, name in func["in"]}
@@ -169,7 +172,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             return False
 
     def getTypeSignature(expr):
-        print(expr)
+        if DEBUG:
+            print(expr)
         if isinstance(expr, Token):
             #print(expr.type, expr.type == "DEC_NUMBER")
             if expr.type == "DEC_NUMBER":
@@ -193,7 +197,7 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             try:
                 expr.type
             except AttributeError:
-                print(expr)
+                print("attrerr:", expr)
             return expr.type
         elif isinstance(expr, L):
             if isinstance(expr.type, str):
@@ -267,8 +271,9 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
     arglen = inTypLen(func["in"])
     retlen = typLen(func["out"])
 
-    print(func["in"], arglen)
-    print(func["out"], retlen)
+    if DEBUG:
+        print(func["in"], arglen)
+        print(func["out"], retlen)
 
     # Get offset relative to stack frame
     def getRelativeOffset(name):
@@ -401,7 +406,9 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             #node.code += ["PUSH 0", "arealen", "PUSH 1", "SUB"]
             # Save return address in frame
             #node.code += ["ROT2", "WRITE"]
-            print(funcname, node[0])
+            if DEBUG:
+                print(funcname, node[0])
+
             node.code += node[0].code
             node.code += ecoda()
 
@@ -414,7 +421,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             node = L(node)
             node.code = []
             for child in node:
-                print(child)
+                if DEBUG:
+                    print(child)
                 node.code += pushExpr(child)
             return node
 
@@ -450,7 +458,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
 
         """
         def funcall(self, node):
-            print("()", node)
+            if DEBUG:
+                print("()", node)
             node = L(node)
             otherfuncname = node[0].children[0].value
             otherfunc = funcs[otherfuncname]
@@ -544,7 +553,9 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
                 abort("Cannot index into non-pointer type %s of '%s'" % (leftType, node[0]), node)
             if rightType != "u":
                 abort("Cannot index into pointer using non-u type %s of %s" % (rightType, node[1]), node)
-            print("[]", leftType, rightType)
+
+            if DEBUG:
+                print("[]", leftType, rightType)
             node.code = []
             node.code += ["PUSH 0"] + pushExpr(node[0]) + pushExpr(node[1]) + ["ADD", "READ"]
             node.type = leftType[1:]
@@ -667,7 +678,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
 
         def comparison(self, node):
             node = L(node)
-            print("cmp", node)
+            if DEBUG:
+                print("cmp", node)
             leftType, rightType = ensurePrimitive("cmp", node[0], node[2])
             node.code = []
 
@@ -720,9 +732,11 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             return node
 
         def assign(self, node):
-            print("=", node)
+            if DEBUG:
+                print("=", node)
             rightType = getTypeSignature(node[1])
-            print("=", rightType)
+            if DEBUG:
+                print("=", rightType)
 
             if hasType(node[0].value):
                 leftType = getTypeSignature(node[0].value)
@@ -795,7 +809,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
         def tuple(self, node):
             node = L(node)
             node.code = []
-            print("TUPLE", node, node.code)
+            if DEBUG:
+                print("TUPLE", node, node.code)
             if isinstance(node, list):
                 data = node
                 tup = list(getTypeSignature(n) for n in data)
@@ -851,7 +866,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
             node.type = "vector"
             arr = node[0].value[1:-1]
             new = stringToWords(arr)
-            print("String", new)
+            if DEBUG:
+                print("String", new)
             node.code = []
             node.code += asm("alloc(%i,%i)" % (MEM_HEAP, len(new)))
             for i, c in enumerate(new):
@@ -862,7 +878,8 @@ def compile_function(abort, warn, generator, types, funcs, funcname):
     # todo add casting
 
     annotator = TypeAnnotator()
-    print(tree)
+    if DEBUG:
+        print(tree)
     tree = annotator.transform(tree)
 
     return tree
@@ -895,7 +912,8 @@ def compile(text, path=None):
     class TypeGetter(Visitor):
         def start(self, node):
             #print(node)
-            print("Collected type definitions and function signatures.")
+            if DEBUG:
+                print("Collected type definitions and function signatures.")
 
         def importdef(self, node):
             imports[node.children[0].value] = {}
@@ -941,7 +959,8 @@ def compile(text, path=None):
         clean = text.strip()
 
         prepped = prep(clean)
-        print(prepped)
+        if DEBUG:
+            print(prepped)
         parsed = l.parse(prepped)
 
         tg.visit(parsed)
@@ -958,7 +977,8 @@ def compile(text, path=None):
         if not os.path.exists(fullpath):
             abort("Tried to import %s but could not find it in the path" % (importname))
         prepare(path=fullpath)
-        print("Imported %s" % (name))
+        if DEBUG:
+            print("Imported %s" % (name))
 
     # Kahn's algorithm (DAG)
 
@@ -1020,7 +1040,8 @@ def compile(text, path=None):
         func["code"] = funcname+":"+"\n" + func["code"]
         func["compiled"] = assemble(func["code"])
         code += [len(func["compiled"])] + func["compiled"]
-        print(funcname, func["offset"], len(func["compiled"]))
+        if DEBUG:
+            print(funcname, func["offset"], len(func["compiled"]))
         #code += str(len(func["code"])) + "\n"#XXX not len of CODE STRING, BUT COMPILED!
         #
         #code += func["code"] + "\n"

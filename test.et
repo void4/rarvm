@@ -1,0 +1,4 @@
+import stdio
+
+def main() -> ():
+    printiln(42+1)

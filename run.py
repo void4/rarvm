@@ -11,7 +11,7 @@ with open(sys.argv[1], "r") as f:
     source = f.read()
 
 binary = compile(source)
-print(binary)
+#print(binary)
 
 """
 LAST THING I DID

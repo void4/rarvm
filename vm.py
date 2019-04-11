@@ -652,9 +652,9 @@ def entry_point(argv):
             break
         flat = s(sharp)
 
-    print(time.time()-t)
+    #print(time.time()-t)
     #print(ret)
-    print(STATI[ret[STATUS]])
+    #print(STATI[ret[STATUS]])
     return 0
 
 def target(*args):
