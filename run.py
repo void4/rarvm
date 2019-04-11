@@ -27,4 +27,5 @@ if "debug" in sys.argv:
 else:
     debug = False
 
-entry_point(["main", path, 1000000000, 1000000000, debug])
+#entry_point(["main", path, 1000000000, 1000000000, debug])
+entry_point(["main", binary.data, 1000000000, 1000000000, debug])

@@ -617,15 +617,20 @@ def entry_point(argv):
     debug = False
     if len(argv) > 4:
         debug = bool(argv[4])
-    #binary = os.open(argv[1], os.O_RDONLY, 0777)
-    binary = os.open(argv[1], os.O_RDONLY)
-    data = os.read(binary, 2**32)#XXX
-    os.close(binary)
+
+    if isinstance(argv[1], str):
+        #binary = os.open(argv[1], os.O_RDONLY, 0777)
+        binary = os.open(argv[1], os.O_RDONLY)
+        data = os.read(binary, 2**32)#XXX
+        os.close(binary)
+        flat = unpack(data)
+    else:
+        flat = argv[1]
 
     gas = int(argv[2])
     mem = int(argv[3])
 
-    flat = unpack(data)
+
     t = time.time()
     while True:
         ret = run(flat, gas, mem, debug=debug)
