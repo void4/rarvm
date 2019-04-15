@@ -1,4 +1,6 @@
-# rarvm
+# rarVM
+
+This is a rarVM implementation in (R)Python.
 
 ## Installation
 
