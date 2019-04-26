@@ -209,9 +209,11 @@ def hasmem(state, mem):
         state[HEAD][STATUS] = OOM
         return False
 
-trace = []
+
 
 def run(binary, gas, mem, debug):
+
+    trace = []
 
     binary[STATUS] = NORMAL
     binary[GAS] = gas
@@ -247,7 +249,10 @@ def run(binary, gas, mem, debug):
         else:
             # Check if current instruction pointer is within code bounds
             ip = state[HEAD][IP]
-            trace.append(ip)
+            
+            if debug:
+                trace.append(ip)
+
             if len(state) < MEMORY + 1 or ip >= len(state[MEMORY]):
                 state[HEAD][STATUS] = OOC
                 jump_back = len(states)-2
