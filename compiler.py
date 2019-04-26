@@ -1056,4 +1056,7 @@ def compile(text, path=None):
     #print(code)
     binary = pack(code,[],map)#See ^XXX^
     #print(binary.data)
+
+    code += ["HALT"]
+
     return binary
