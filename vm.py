@@ -31,7 +31,7 @@ STATUS, REC, GAS, MEM, IP = range(5)
 HEAD, STACK, MAP, MEMORY = range(4)
 F_STATUS, F_REC, F_GAS, F_MEM, F_IP, F_LENSTACK, F_LENMAP, F_LENMEMORY, F_STACK, F_MAP, F_MEMORY = range(11)
 
-NORMAL, FROZEN, VOLHALT, VOLRETURN, VOLYIELD, OOG, OOC, OOS, OOM, OOB, UOC, RECURSE = range(12)
+NORMAL, FROZEN, VOLHALT, VOLRETURN, VOLYIELD, OOG, OOC, OOS, OOM, OOB, UOC, RECURSE, IIN = range(13)
 #STATI = ["NORMAL", "FROZEN", "VOLHALT", "VOLRETURN", "VOLYIELD", "OUTOFGAS", "OUTOFCODE", "OUTOFSTACK", "OUTOFMEMORY", "OUTOFBOUNDS", "UNKNOWNCODE", "RUN"]
 STATI = ["NOR", "FRZ", "HLT", "RET", "YLD", "OOG", "OOC", "OOS", "OOM", "OOB", "UOC", "REC"]
 
@@ -249,7 +249,7 @@ def run(binary, gas, mem, debug):
         else:
             # Check if current instruction pointer is within code bounds
             ip = state[HEAD][IP]
-            
+
             if debug:
                 trace.append(ip)
 
@@ -267,17 +267,23 @@ def run(binary, gas, mem, debug):
                     #if len(state) > MEMORY:
                     #    print("MEMORY", state[MEMORY:])
                 #    print(ip, INSTR[instr])
-                reqs = REQS[instr]
 
-                # Check if extended instructions are within code bounds
-                if ip + reqs[0] - 1 >= len(state[MEMORY]):
-                    state[HEAD][STATUS] = OOC
+                try:
+                    reqs = REQS[instr]
+                except IndexError:
+                    # invalid instruction
+                    state[HEAD][STATUS] = IIN
                     jump_back = len(states)-2
+                else:
+                    # Check if extended instructions are within code bounds
+                    if ip + reqs[0] - 1 >= len(state[MEMORY]):
+                        state[HEAD][STATUS] = OOC
+                        jump_back = len(states)-2
 
-                # Check whether stack has sufficient items for current instruction
-                elif len(state[STACK]) < reqs[1]:
-                    state[HEAD][STATUS] = OOS
-                    jump_back = len(states)-2
+                    # Check whether stack has sufficient items for current instruction
+                    elif len(state[STACK]) < reqs[1]:
+                        state[HEAD][STATUS] = OOS
+                        jump_back = len(states)-2
 
         if jump_back == -2:
             # Check parent chain resources recursively
