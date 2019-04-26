@@ -383,7 +383,7 @@ def run(binary, gas, mem, debug):
             stacklen = len(state[STACK])
             if instr == HALT:
                 state[HEAD][STATUS] = VOLHALT
-                next(state)
+                next(state, jump=0, relative=True)
             elif instr == RETURN:
                 state[HEAD][STATUS] = VOLRETURN
                 state[HEAD][IP] = 0
