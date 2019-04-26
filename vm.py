@@ -606,30 +606,33 @@ def unpack(b):
         offset += 8
     return d
 
+
+def pack(d):
+    b = b""
+    b += len(d).to_bytes(8, byteorder="big", signed=False)
+    for i in range(len(d)):
+        assert d[i] >= 0
+        v = d[i].to_bytes(8, byteorder="big", signed=False)
+        b += v
+    return b
+
 import sys
 import time
 
-def entry_point(argv):
-    if len(argv) < 4:
-        print("<file> <gas> <mem>")
-        return 1
+import argparse
 
-    debug = False
-    if len(argv) > 4:
-        debug = bool(argv[4])
+def entry_point(filepath, gas, mem, debug, outpath):
 
-    if isinstance(argv[1], str):
-        #binary = os.open(argv[1], os.O_RDONLY, 0777)
-        binary = os.open(argv[1], os.O_RDONLY)
+    if isinstance(filepath, str):
+        binary = os.open(filepath, os.O_RDONLY)
         data = os.read(binary, 2**32)#XXX
         os.close(binary)
         flat = unpack(data)
     else:
-        flat = argv[1]
+        flat = filepath
 
-    gas = int(argv[2])
-    mem = int(argv[3])
-
+    gas = int(gas)
+    mem = int(mem)
 
     t = time.time()
     while True:
@@ -657,6 +660,11 @@ def entry_point(argv):
             break
         flat = s(sharp)
 
+    if outpath is not None:
+        data = pack(ret)
+        binary = os.open(outpath, os.O_WRONLY | os.O_CREAT)
+        os.write(binary, data)
+        os.close(binary)
     #print(time.time()-t)
     #print(ret)
     #print(STATI[ret[STATUS]])
@@ -677,5 +685,14 @@ def jitpolicy(driver):
     from rpython.jit.codewriter.policy import JitPolicy
     return JitPolicy()
 
+
 if __name__ == "__main__":
-    entry_point(sys.argv)
+    parser = argparse.ArgumentParser("rarVM", description="Executes a rarVM binary")
+    parser.add_argument("filename", type=str)
+    parser.add_argument("--gas", type=int, default=1000000)
+    parser.add_argument("--mem", type=int, default=1000000)
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--out", type=str, default=None)
+    args = parser.parse_args()
+    #print(args)
+    entry_point(args.filename, args.gas, args.mem, args.debug, args.out)
