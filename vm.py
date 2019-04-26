@@ -211,7 +211,7 @@ def hasmem(state, mem):
 
 trace = []
 
-def run(binary, gas=100, mem=100, debug=False):
+def run(binary, gas, mem, debug):
 
     binary[STATUS] = NORMAL
     binary[GAS] = gas
@@ -280,7 +280,7 @@ def run(binary, gas=100, mem=100, debug=False):
             base_gas = 1#reqs[2]
             base_mem = 1
             for i in range(len(states)):
-                layer_cost = (sizes[i]+base_mem)*base_gas
+                layer_cost = base_gas#(sizes[i]+base_mem)*base_gas
                 if layer_cost > states[i][HEAD][GAS]:
                     states[i][HEAD][STATUS] = OOG
                     jump_back = i-1
@@ -321,9 +321,9 @@ def run(binary, gas=100, mem=100, debug=False):
                     break
 
         if debug:
-            print("".join(["<-|%s¦%s¦%s|%s|%s¦%s" % (STATI[states[i][HEAD][STATUS]], str(states[i][HEAD][GAS]//10**6), str(states[i][HEAD][MEM]//10**6), states[i][HEAD][IP], states[i][STACK], INSTR[states[i][MEMORY][states[i][HEAD][IP]]]) for i in range(len(states))]))
-            if len(states[0]) > MEMORY+1:
-                print(states[0][MEMORY+1])
+            print("".join(["<-|%s¦GAS:%s¦MEM:%s|IP:%s|%s¦%s" % (STATI[states[i][HEAD][STATUS]], str(states[i][HEAD][GAS]), str(states[i][HEAD][MEM]), states[i][HEAD][IP], states[i][STACK], INSTR[states[i][MEMORY][states[i][HEAD][IP]]]) for i in range(len(states))]))
+            #if len(states[0]) > MEMORY+1:
+            #    print(states[0][MEMORY+1])
 
         if jump_back > -2:
             pass
@@ -693,6 +693,7 @@ if __name__ == "__main__":
     parser.add_argument("--mem", type=int, default=1000000)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--out", type=str, default=None)
+    #TODO only write --out on OOG, OOM etc!
     args = parser.parse_args()
     #print(args)
     entry_point(args.filename, args.gas, args.mem, args.debug, args.out)
