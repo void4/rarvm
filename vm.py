@@ -166,7 +166,6 @@ def next(state, jump=-1, relative=False):
 # 2. Have a side effect and be called _last_
 # This is to ensure failing instructions can be continued normally
 
-@elidable
 def top(state):
     """Returns the top of the stack"""
     if len(state[STACK]) <= 0:
@@ -238,14 +237,22 @@ def run(binary, gas, mem, debug):
         if state[HEAD][STATUS] != NORMAL and state[HEAD][REC] == 0:
             jump_back = len(states)-2
 
+        def jb(status=None, back=1, relative=True):
+            nonlocal state, jump_back
+
+            if relative:
+                jump_back = len(states) - 1 - back
+            else:
+                jump_back = back
+
+            if status is not None:
+                state[HEAD][STATUS] = status
 
         # Check if state has enough gas
-        elif state[HEAD][GAS] <= 0:
-            state[HEAD][STATUS] = OOG
-            jump_back = len(states)-2
+        if state[HEAD][GAS] <= 0:
+            jb(OOG)
         elif state[HEAD][MEM] <= 0:
-            state[HEAD][STATUS] = OOM
-            jump_back = len(states)-2
+            jb(OOM)
         else:
             # Check if current instruction pointer is within code bounds
             ip = state[HEAD][IP]
@@ -254,8 +261,7 @@ def run(binary, gas, mem, debug):
                 trace.append(ip)
 
             if len(state) < MEMORY + 1 or ip >= len(state[MEMORY]):
-                state[HEAD][STATUS] = OOC
-                jump_back = len(states)-2
+                jb(OOC)
             else:
 
                 instr = state[MEMORY][ip]
@@ -272,18 +278,15 @@ def run(binary, gas, mem, debug):
                     reqs = REQS[instr]
                 except IndexError:
                     # invalid instruction
-                    state[HEAD][STATUS] = IIN
-                    jump_back = len(states)-2
+                    jb(IIN)
                 else:
                     # Check if extended instructions are within code bounds
                     if ip + reqs[0] - 1 >= len(state[MEMORY]):
-                        state[HEAD][STATUS] = OOC
-                        jump_back = len(states)-2
+                        jb(OOC)
 
                     # Check whether stack has sufficient items for current instruction
                     elif len(state[STACK]) < reqs[1]:
-                        state[HEAD][STATUS] = OOS
-                        jump_back = len(states)-2
+                        jb(OOS)
 
         if jump_back == -2:
             # Check parent chain resources recursively
