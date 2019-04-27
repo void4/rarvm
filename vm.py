@@ -214,11 +214,14 @@ def run(binary, gas, mem, debug):
 
     trace = []
 
-    binary[STATUS] = NORMAL
-    binary[GAS] = gas
-    binary[MEM] = mem
+    blob = d(binary)
 
-    states = [d(binary)]
+    blob[HEAD][STATUS] = NORMAL
+    blob[HEAD][GAS] = gas
+    blob[HEAD][MEM] = mem
+
+
+    states = [blob]
     edges = [0]
     sizes = [len(binary)]
     while True:
