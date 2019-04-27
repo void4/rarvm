@@ -1,23 +1,3 @@
-#pypy2-v6.0.0-linux64/bin/pypy pypy2-v6.0.0-src/rpython/translator/goal/translate.py --opt=jit v/vm.py
-
-try:
-    from rpython.rlib.jit import JitDriver
-    from rpython.rlib.jit import elidable, unroll_safe
-    from rpython.rlib.jit import assert_green
-    from rpython.rlib.jit import set_param
-except ImportError:
-    """Python compatibility."""
-    class JitDriver(object):
-        def __init__(self, **kw): pass
-        def jit_merge_point(self, **kw): pass
-        def can_enter_jit(self, **kw): pass
-    def elidable(f): return f
-    def dont_look_inside(f): return f
-    def unroll_safe(f): return f
-    def hint(v, **kw): return v
-    def assert_green(x): pass
-    def set_param(driver, name, value): pass
-
 from time import sleep
 from numeric import tcr
 #from copy import deepcopy
@@ -93,7 +73,6 @@ REQS = [
     [1,1,0,10],
 ]
 
-#@elidable
 def s(sharp):
     """Flattens and serializes the nested state structure"""
     flat = [] #!!! new list
@@ -111,10 +90,8 @@ def s(sharp):
         flat += sharp[i]
     return flat
 
-#@elidable
 def d(flat):
     """Deserializes and restores the runtime state structure from the flat version"""
-
     sharp = []
     sharp.append(flat[:F_LENSTACK])
     lenstack = flat[F_LENSTACK]
@@ -141,7 +118,6 @@ def d(flat):
         index = index + 1 + lenarea
     return sharp
 
-#@unroll_safe
 def next(state, jump=-1, relative=False):
     """Pops arguments. Sets the instruction pointer"""
     instr = state[MEMORY][state[HEAD][IP]]
@@ -199,7 +175,6 @@ def validmemory(state, area, addr):
     else:
         return True
 
-@elidable
 def hasmem(state, mem):
     """Checks if state has enough mem, sets flag otherwise"""
     if mem <= state[HEAD][MEM]:
@@ -226,7 +201,6 @@ def run(binary, gas, mem, debug):
     sizes = [len(binary)]
     while True:
         #XXX debug = len(states) > 1
-        #TODO jitdriver.jit_merge_point(ip=states[-1][HEAD][IP], code=states[-1][CODE], state=states, edges=edges, sizes=sizes)
         state = states[-1]
         #print(state)
         #print("\n"*5)
@@ -400,7 +374,6 @@ def run(binary, gas, mem, debug):
                 next(state, top(state))
             elif instr == JZ:
                 if state[STACK][-2] == 0:
-                    jitdriver.can_enter_jit(ip=state[HEAD][IP], code=state[MEMORY], state=states, edges=edges, sizes=sizes)
                     next(state, top(state))
                 else:
                     next(state)
@@ -408,7 +381,6 @@ def run(binary, gas, mem, debug):
                 next(state, top(state), relative=True)
             elif instr == JZR:
                 if state[STACK][-2] == 0:
-                    jitdriver.can_enter_jit(ip=state[HEAD][IP], code=state[MEMORY], state=states, edges=edges, sizes=sizes)
                     next(state, top(state), relative=True)
                 else:
                     next(state)
@@ -687,21 +659,8 @@ def entry_point(filepath, gas, mem, debug, outpath):
     #print(STATI[ret[STATUS]])
     return 0
 
-def target(*args):
-    return entry_point, None
-
 def get_location(ip, code):
     return "%s %s" % (str(ip), code)
-
-jitdriver = JitDriver(greens=["ip", "code"],
-        reds=["state", "edges", "sizes"],
-        get_printable_location=get_location)
-
-
-def jitpolicy(driver):
-    from rpython.jit.codewriter.policy import JitPolicy
-    return JitPolicy()
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("rarVM", description="Executes a rarVM binary")
