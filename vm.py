@@ -187,8 +187,6 @@ def hasmem(state, mem):
 
 def run(binary, gas, mem, debug):
 
-    trace = []
-
     blob = d(binary)
 
     blob[HEAD][STATUS] = NORMAL
@@ -202,15 +200,13 @@ def run(binary, gas, mem, debug):
     while True:
         #XXX debug = len(states) > 1
         state = states[-1]
-        #print(state)
-        #print("\n"*5)
-        #print(state)
+
         jump_back = -2
 
         ip = -1
         instr = -1
         reqs = [0,0,0,0]
-        #print(state[HEAD])
+
         if state[HEAD][STATUS] != NORMAL and state[HEAD][REC] == 0:
             jump_back = len(states)-2
 
@@ -234,22 +230,11 @@ def run(binary, gas, mem, debug):
             # Check if current instruction pointer is within code bounds
             ip = state[HEAD][IP]
 
-            if debug:
-                trace.append(ip)
-
             if len(state) < MEMORY + 1 or ip >= len(state[MEMORY]):
                 jb(OOC)
             else:
 
                 instr = state[MEMORY][ip]
-                #if debug:
-                #    print(instr)
-                #    print(INSTR[instr])
-                #if debug:
-                    #print("STACK", state[STACK])
-                    #if len(state) > MEMORY:
-                    #    print("MEMORY", state[MEMORY:])
-                #    print(ip, INSTR[instr])
 
                 try:
                     reqs = REQS[instr]
@@ -277,10 +262,6 @@ def run(binary, gas, mem, debug):
                     jump_back = i-1
                     break
 
-        #for st in states:
-        #    print(st[HEAD])
-        #if len(states)>1:
-        #    print(jump_back,len(states), INSTR[instr], state[HEAD])
         if jump_back > -2:
             if debug:
                 print("<<<", jump_back)
@@ -303,9 +284,6 @@ def run(binary, gas, mem, debug):
                 #if len(states) > 1:
                 #    print(states[1][HEAD])
                 if i==0:
-                    #if debug:
-                    #    print("STACK:",states[0][STACK])
-                    #    print("MEMORY:",states[0][MEMORY])
                     return serialized
 
                 if i==jump_back-1:
@@ -323,7 +301,6 @@ def run(binary, gas, mem, debug):
             #gas = state[STACK][-2]
             #mem = state[STACK][-1]
             area = state[STACK][-1]
-            #print(state[STACK])
             if validarea(state, area) and len(state[MEMORY+area]) > 4:#HEADERLEN
                 child = state[MEMORY+area]
                 #for mi, m in enumerate(state[MEMORY:]):
@@ -649,7 +626,7 @@ def entry_point(filepath, gas, mem, debug, outpath):
             break
         flat = s(sharp)
 
-    if outpath is not None:
+    if outpath is not None:# and sharp[HEAD][STATUS] != VOLHALT:
         data = pack(ret)
         binary = os.open(outpath, os.O_WRONLY | os.O_CREAT)
         os.write(binary, data)
@@ -658,9 +635,6 @@ def entry_point(filepath, gas, mem, debug, outpath):
     #print(ret)
     #print(STATI[ret[STATUS]])
     return 0
-
-def get_location(ip, code):
-    return "%s %s" % (str(ip), code)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("rarVM", description="Executes a rarVM binary")
