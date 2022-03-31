@@ -1,5 +1,5 @@
 from compiler import compile
-from vm import entry_point
+from shell import entry_point
 
 path = "bin.b"
 import sys
