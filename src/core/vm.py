@@ -1,9 +1,9 @@
 from time import sleep
-from numeric import tcr
 #from copy import deepcopy
 
-from constants import *
-from formats import *
+from core.numeric import tcr
+from core.constants import *
+from core.formats import *
 
 def next(state, jump=-1, relative=False):
     """Pops arguments. Sets the instruction pointer"""

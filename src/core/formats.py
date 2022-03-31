@@ -1,4 +1,4 @@
-from constants import *
+from core.constants import *
 
 def s(sharp):
     """Flattens and serializes the nested state structure"""

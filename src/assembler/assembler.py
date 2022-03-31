@@ -1,6 +1,7 @@
-from vm import INSTR, PUSH, WMASK, WORDSIZE
-from numeric import tc
 import sys
+
+from core.constants import INSTR, PUSH, WMASK, WORDSIZE
+from core.numeric import tc
 
 opcodes = [instr.lower() for instr in INSTR]
 #print(opcodes)

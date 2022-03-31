@@ -3,7 +3,7 @@ import sys
 import time
 import argparse
 
-from vm import *
+from core.vm import *
 
 def b64(b):
     v = 0

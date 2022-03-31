@@ -2,10 +2,10 @@ from lark import Lark, Tree, Transformer
 from lark.tree import Visitor
 from lark.lexer import Token
 
-from assembler import pack, assemble
-from asmutils import asm
+from assembler.assembler import pack, assemble
+from assembler.asmutils import asm
 
-from utils import L, kahn, stringToWords, nametoint
+from compiler.utils import L, kahn, stringToWords, nametoint
 
 import os
 
@@ -975,7 +975,11 @@ def compile(text, path=None):
     for name in imports:
         fullpath = path+name+".et"
         if not os.path.exists(fullpath):
-            abort("Tried to import %s but could not find it in the path" % (importname))
+            stdlibpath = "stdlib/"+fullpath
+            if os.path.exists(stdlibpath):
+                fullpath = stdlibpath
+            else:
+                abort("Tried to import %s but could not find it in the path" % (importname))
         prepare(path=fullpath)
         if DEBUG:
             print("Imported %s" % (name))

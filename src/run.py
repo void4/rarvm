@@ -1,8 +1,11 @@
-from compiler import compile
+import sys
+sys.dont_write_bytecode = True
+
+from compiler.compiler import compile
 from shell import entry_point
 
 path = "bin.b"
-import sys
+
 if len(sys.argv) < 2:
     print("Missing <source>")
     exit(1)

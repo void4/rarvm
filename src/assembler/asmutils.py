@@ -1,4 +1,8 @@
+import time
+
 from lark import Lark, Tree, Transformer
+
+from core.constants import *
 
 asmgrammar = r"""
 %ignore /[\t \f]+/  // Whitespace
@@ -48,8 +52,6 @@ label: NAME ":"
 instruction: NAME [NAME | NUMBER]
 """
 
-from vm import REQS, INSTR
-import time
 def disasm(text):
     lines = text.split("\n")
     lineno = 0
