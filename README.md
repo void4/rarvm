@@ -10,4 +10,7 @@ There's also a high level language called 'Entish' (file extension .et), which l
 
 ## Usage
 
-`python run.py source.et`
+```Python
+cd src
+python run.py examples/source.et
+```
