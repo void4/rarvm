@@ -108,7 +108,6 @@ def res(u area) -> (u):
     # Return values are on stack (coda doesnt write them to memory)
     return $read(area, 8)
 
-
 def run(u ar, u gas, u mem) -> (u):
     print("-area: ")
     printiln(ar)
@@ -146,7 +145,20 @@ def run(u ar, u gas, u mem) -> (u):
 
         return 0
 
-#def getReturnValues(u area):
+def box_function(u func, u arg, u gas, u mem) -> (u):
+	println("Boxing...")
+	boxed = box(func)
+
+	println("\nSupplying arguments...")
+	arg(boxed, arg)
+
+	println("\nRunning...")
+	e = run(boxed, gas, mem)
+
+	println("\nRetrieving result...")
+	result = res(boxed)
+
+	return result
 
 def destroy(u area):
     $dealloc(area, $arealen(area))

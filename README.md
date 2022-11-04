@@ -12,5 +12,5 @@ There's also a high level language called 'Entish' (file extension .et), which l
 
 ```Python
 cd src
-python run.py examples/source.et
+python run.py examples/simple.et
 ```

@@ -9,6 +9,8 @@ from compiler.utils import L, kahn, stringToWords, nametoint
 
 import os
 
+DEBUG = False
+
 grammar = r"""
 NAME: /\*?[a-zA-Z_]\w*/
 COMMENT: /#[^\n]*/
@@ -93,11 +95,10 @@ tuple: [NAME] "{" [expr ("," expr)*] "}"
 attr: NAME "." NAME
 """
 
-DEBUG = False
-
-l = Lark(grammar, debug=True)
+l = Lark(grammar, debug=DEBUG)
 
 def indent(line):
+    line = line.replace("\t", " "*4)
     return (len(line) - len(line.lstrip(' '))) // 4
 
 def prep(code):
@@ -901,7 +902,7 @@ def compile(text, path=None):
         return out
 
     def warn(msg, node=None):
-        print(errortext("Warning",msg, node))
+        print(errortext("Warning", msg, node))
 
     def abort(msg, node=None):
         raise Exception(errortext("Error",msg, node))
@@ -980,6 +981,8 @@ def compile(text, path=None):
                 fullpath = stdlibpath
             else:
                 abort("Tried to import %s but could not find it in the path" % (importname))
+        if DEBUG:
+            print(fullpath)
         prepare(path=fullpath)
         if DEBUG:
             print("Imported %s" % (name))

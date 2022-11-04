@@ -1,0 +1,10 @@
+import stdio
+import sandbox
+
+def f(u x) -> (u):
+    return x + 1
+
+def main() -> (u):
+    result = box_function($funcname(f), 42, 100000, 100000)
+    print("Result: ")
+    printiln(result)
